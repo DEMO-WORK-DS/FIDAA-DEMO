@@ -2,6 +2,20 @@
 # Copyright (C) 2026 FIDAA contributors
 # Licensed under the EUPL, Version 1.2 only. See: https://eupl.eu/1.2/en/
 
-{$DOMAIN:localhost:80} {
+# Public TLS is not available yet: the h2 central IT edge (kihap.h2.de)
+# filters port 80 and terminates TLS on 443, so Let's Encrypt challenges
+# can never reach this container, and the fidaa.h2.de SNI is not routed
+# here yet (IT onboarding pending).
+# Until then, serve all hosts/IPs for internal (LAN/VPN) access:
+#   :80  - plain HTTP; also the backend the edge will use once
+#          IT routes fidaa.h2.de here
+#   :443 - self-signed TLS (Caddy's internal CA); browsers show a
+#          certificate warning, click through
+:80 {
+    reverse_proxy app:8000
+}
+
+:443 {
+    tls internal
     reverse_proxy app:8000
 }
