@@ -3,7 +3,7 @@
 Chainlit RAG Agent für einfaches Information Retrieval im Chat-Format aus einer vorgegebenen, geprüften Wissensadatenbank.
 Verwendet OpenAI-kompatibles Backend für Chat-Streaming (mit Thinking & Tooluse) sowie Embedding.
 Langchain RAG wird bei Start aus Dokumenten geladen und in via pgvector in Postgresdatenbank aufgebaut.
-Containerisiert mit Docker. Optionaler Dockercontainer um einen gezielten VPN-Tunnel zum OpenAI-compatiblen API-Server aufzubauen.
+Containerisiert mit Docker.
 
 ## Quickstart
 

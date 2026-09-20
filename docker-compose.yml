@@ -37,22 +37,18 @@ services:
       # If POSTGRES_PASSWORD is changed in secrets.env, update DATABASE_URL too.
       # Set DATABASE_URL directly to use an external database.
       DATABASE_URL: "${DATABASE_URL:-postgresql://appuser:change-me@postgres:5432/chat}"
-      LLM_URL: "${LLM_URL:-https://api.openai.com/v1}"
+      # LLM_URL, LLM_KEY, EMBEDDING_MODEL come from secrets.env.
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       MAX_PASSWORD_LENGTH: "${MAX_PASSWORD_LENGTH:-128}"
       MAX_MESSAGE_LENGTH: "${MAX_MESSAGE_LENGTH:-4000}"
       # CHAINLIT_AUTH_SECRET is auto-generated at runtime if unset.
       # Set it in secrets.env to persist sessions across container restarts.
-      # PROXY_URL: socks5://vpn:8889  # set in secrets.env when VPN is enabled
       # DOCUMENTS_PATH: /app/documents  # optional: folder of .md files for document search
     networks:
       - frontend
-      - vpn_net
     depends_on:
       postgres:
         condition: service_healthy
-      vpn:
-        condition: service_started
     restart: unless-stopped
 
   postgres:
@@ -76,28 +72,8 @@ services:
       retries: 5
     restart: unless-stopped
 
-  vpn:
-    image: wazum/openconnect-proxy:latest
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    env_file:
-      - path: secrets.env
-        required: false
-    environment:
-      # VPN credentials come from secrets.env (OPENCONNECT_URL, OPENCONNECT_USER, OPENCONNECT_PASSWORD).
-      OPENCONNECT_OPTIONS: "--protocol=gp --no-dtls"
-      VPN_SPLIT: "1"
-      # VPN_ROUTES comes from secrets.env via env_file
-    networks:
-      - vpn_net
-    restart: unless-stopped
-
 networks:
   frontend:
-    driver: bridge
-  vpn_net:
     driver: bridge
 
 volumes:

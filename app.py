@@ -40,7 +40,7 @@ import playhouse.db_url as ph_url  # pyright: ignore[reportMissingTypeStubs]  # 
 from email_validator import EmailNotValidError, validate_email
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import MarkdownHeaderTextSplitter
-from openai import AsyncClient, AsyncOpenAI, DefaultAsyncHttpxClient, DefaultHttpxClient
+from openai import AsyncClient, AsyncOpenAI
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -64,7 +64,6 @@ if not os.environ.get("CHAINLIT_AUTH_SECRET"):
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///users.db")
 DOCUMENTS_PATH = os.getenv("DOCUMENTS_PATH")
-PROXY_URL = os.getenv("PROXY_URL")
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "Qwen3-Embedding-4B")
 
@@ -85,22 +84,12 @@ cl.instrument_openai()
 
 
 def _make_openai_client(timeout: float = 120.0):
-    """Erstelle AsyncOpenAI client. Optional mit VPN-Proxy Verbindung, wenn PROXY_URL (env variable) gesetzt ist."""
-    if PROXY_URL:
-        # Siehe https://github.com/openai/openai-python/blob/main/README.md#configuring-the-http-client
-        # Verweist auf das Überladen von DefaultHttpxClient, um Proxies nach https://www.python-httpx.org/advanced/proxies/ einzurichten.
-        return AsyncOpenAI(
-            http_client=DefaultAsyncHttpxClient(proxy=PROXY_URL),
-            base_url=LLM_URL,
-            api_key=LLM_KEY,
-            timeout=httpx.Timeout(timeout, connect=10.0),
-        )
-    else:
-        return AsyncOpenAI(
-            base_url=LLM_URL,
-            api_key=LLM_KEY,
-            timeout=httpx.Timeout(timeout, connect=10.0),
-        )
+    """Erstelle AsyncOpenAI client."""
+    return AsyncOpenAI(
+        base_url=LLM_URL,
+        api_key=LLM_KEY,
+        timeout=httpx.Timeout(timeout, connect=10.0),
+    )
 
 
 # ------------------------------------------------
@@ -311,9 +300,6 @@ def _get_embeddings():
             tiktoken_enabled=False,
             chunk_size=32,
         )
-        if PROXY_URL:
-            kwargs["http_client"] = DefaultHttpxClient(proxy=PROXY_URL)
-            kwargs["http_async_client"] = DefaultAsyncHttpxClient(proxy=PROXY_URL)
 
         # Use InstructionAwareEmbeddings for instruction-aware embeddings
         _embeddings = InstructionAwareEmbeddings(**kwargs)
