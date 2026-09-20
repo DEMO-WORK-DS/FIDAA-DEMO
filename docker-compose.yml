@@ -31,7 +31,7 @@ services:
         required: false
     environment:
       PYTHONUNBUFFERED: "1"
-      DEFAULT_MODEL: "${DEFAULT_MODEL:-Qwen-3.6}"
+      DEFAULT_MODEL: "${DEFAULT_MODEL:-Qwen-3.8}"
       ASSISTANT_NAME: "${ASSISTANT_NAME:-FIDAA}"
       # DATABASE_URL defaults to the local postgres service.
       # If POSTGRES_PASSWORD is changed in secrets.env, update DATABASE_URL too.
