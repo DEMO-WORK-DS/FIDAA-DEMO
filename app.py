@@ -38,6 +38,8 @@ import httpx
 import peewee as pw
 import playhouse.db_url as ph_url  # pyright: ignore[reportMissingTypeStubs]  # bundled with peewee, no stubs
 from email_validator import EmailNotValidError, validate_email
+# Document: needed to build per-entry bibliography chunks (see build_bibliography)
+from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 from openai import AsyncClient, AsyncOpenAI
@@ -222,6 +224,27 @@ _TOOL_SEARCH_CONTEXT = {
     },
 }
 
+# Bibliography tool: fetches exact source citations from
+# knowledge/bibliography.md so the model can reference a specific work
+# (author/year/title) verbatim instead of paraphrasing or inventing it.
+_TOOL_SEARCH_BIBLIOGRAPHY = {
+    "type": "function",
+    "function": {
+        "name": "search_bibliography",
+        "description": "Durchsuche die Bibliografie (knowledge/bibliography.md) nach der genauen Quellenangabe für ein bestimmtes Werk (Autor, Jahr, Titel).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Titel, Autor:in oder Stichwort des Werks, dessen Quellenangabe gesucht wird.",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+}
+
 _TOOL_SEARCH_DOCUMENTS = {
     "type": "function",
     "function": {
@@ -243,7 +266,7 @@ _TOOL_SEARCH_DOCUMENTS = {
 # Populated at startup; read-only after that
 _startup_error: str | None = None
 _available_models: list[str] = []
-_tools: list[dict] = [_TOOL_SEARCH_CONTEXT, _TOOL_SEARCH_DOCUMENTS]
+_tools: list[dict] = [_TOOL_SEARCH_CONTEXT, _TOOL_SEARCH_BIBLIOGRAPHY, _TOOL_SEARCH_DOCUMENTS]
 
 # OpenAIEmbeddings instance — populated at first call
 
@@ -348,6 +371,31 @@ def build_rag():
     )
     docs = splitter.split_text(context_text)
     return (system_prompt, _build_vectorstore(docs, collection_name="rag_context"))
+
+
+@cl.cache
+def build_bibliography():
+    """Load knowledge/bibliography.md, index one chunk per reference entry.
+
+    Unlike build_rag() (one chunk per H1/H2 section), each bibliography
+    entry ('* **Author (Year)**: ...' bullet) becomes its own chunk: a
+    citation must never be split across chunks, and the largest H1 section
+    (~44 KB) would exceed the 8192-token embedding limit (HTTP 400).
+    The enclosing H1 heading is kept as metadata for source attribution.
+    """
+    bibliography_text = Path("knowledge/bibliography.md").read_text(encoding="utf-8")
+
+    # H1 split keeps the thematic section as metadata; the per-entry re-split
+    # below keeps each reference intact and far below the embedding limit.
+    header_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=[("#", "Header 1")])
+    docs: list[Document] = []
+    for section in header_splitter.split_text(bibliography_text):
+        for entry in re.split(r"(?m)^(?=\* \*\*)", section.page_content):
+            entry = entry.strip()
+            if not entry:
+                continue
+            docs.append(Document(page_content=entry, metadata=dict(section.metadata)))
+    return _build_vectorstore(docs, collection_name="rag_bibliography")
 
 
 @cl.cache
@@ -536,6 +584,15 @@ async def startup():
         _startup_error = "Wissensdatenbank konnte nicht geladen werden. Bitte Administrator kontaktieren."
         return
 
+    # Bibliography is core knowledge (committed, always present) — same
+    # hard-fail behaviour as the RAG build above.
+    try:
+        build_bibliography()
+    except Exception:
+        logger.exception("STARTUP FAILED: bibliography initialization error")
+        _startup_error = "Bibliografie konnte nicht geladen werden. Bitte Administrator kontaktieren."
+        return
+
     try:
         build_document_search()
     except Exception:
@@ -543,7 +600,9 @@ async def startup():
             "STARTUP WARNING: document search initialization failed — disabled"
         )
 
-    _tools = [_TOOL_SEARCH_CONTEXT]
+    # Bibliography tool is registered unconditionally (core knowledge);
+    # only document search depends on the optional DOCUMENTS_PATH.
+    _tools = [_TOOL_SEARCH_CONTEXT, _TOOL_SEARCH_BIBLIOGRAPHY]
     if build_document_search() is not None:
         _tools.append(_TOOL_SEARCH_DOCUMENTS)
 
@@ -650,6 +709,12 @@ async def _run_retrieval(tc, retriever):
 async def _context_step(tc):
     """Search the internal knowledge base."""
     return await _run_retrieval(tc, build_rag()[1])
+
+
+@cl.step(type="tool", name="📚 Bibliographiesuche")
+async def _bibliography_step(tc):
+    """Search the bibliography for an exact source citation."""
+    return await _run_retrieval(tc, build_bibliography())
 
 
 @cl.step(type="tool", name="📄 Dokumentensuche")
@@ -848,6 +913,8 @@ async def on_message(message: cl.Message):
                 for tc in tool_calls_acc:
                     if tc["name"] == "search_context":
                         result = await _context_step(tc)
+                    elif tc["name"] == "search_bibliography":
+                        result = await _bibliography_step(tc)
                     elif tc["name"] == "search_documents":
                         result = await _doc_step(tc)
                     else:
