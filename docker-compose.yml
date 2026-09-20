@@ -10,6 +10,13 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
+      # Self-signed origin cert for the edge's re-encrypted TLS leg (see
+      # Caddyfile). Kept out of git; generate on the server before first up:
+      #   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+      #     -subj "/CN=fidaa.h2-intern.de" \
+      #     -addext "subjectAltName=DNS:fidaa.h2-intern.de,DNS:fidaa.h2.de,IP:172.18.184.41" \
+      #     -keyout certs/fidaa-key.pem -out certs/fidaa-cert.pem
+      - ./certs:/etc/caddy/certs:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:

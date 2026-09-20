@@ -2,18 +2,25 @@
 # Copyright (C) 2026 FIDAA contributors
 # Licensed under the EUPL, Version 1.2 only. See: https://eupl.eu/1.2/en/
 
-# The h2 central IT edge (kihap.h2.de) terminates TLS for fidaa.h2.de
-# (GEANT "runai" cert) and forwards PLAIN HTTP to this backend on port
-# 443 - verified 2026-09-21 with a test service. Public port 80 stays
-# filtered at the edge, so no Let's Encrypt is possible here:
-#   :80  - plain HTTP; internal (LAN/VPN) access
-#   :443 - PLAIN HTTP (no TLS!): the public fidaa.h2.de path. The edge
-#          performs the TLS handshake, so Caddy must not expect one
-#          ("tls internal" here made the edge mark us unhealthy -> 503).
-:80 {
+# The kimap.h2.de edge (unchanged since before 2026-09-18) terminates client
+# TLS (GEANT default cert) and re-encrypts to the origin: the backend must
+# speak TLS on :443 with a certificate covering fidaa.h2.de. We reuse the
+# test service's self-signed cert - proven on this exact path 09-18..09-21
+# (the TLS-only test service received traffic, so the origin leg is TLS, not
+# plain HTTP; the earlier "plain HTTP on 443" assumption was wrong).
+# Do NOT use auto-TLS here (hostless ":443" site => no cert => handshake
+# failure => edge marks the backend down => 503 for everything).
+:443 {
+    tls /etc/caddy/certs/fidaa-cert.pem /etc/caddy/certs/fidaa-key.pem
+    log {
+        format json
+    }
     reverse_proxy app:8000
 }
 
-:443 {
+:80 {
+    log {
+        format json
+    }
     reverse_proxy app:8000
 }

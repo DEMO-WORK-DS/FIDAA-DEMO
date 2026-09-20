@@ -9,6 +9,9 @@ __pycache__/
 *.tar.gz
 .env
 secrets.env
+# Self-signed origin TLS cert + key (generated on the server, see
+# docker-compose.yml) - the private key must never enter the repo
+certs/
 notes/
 .git/
 .files/
