@@ -1,5 +1,77 @@
 # Kontextdatenbank Digital Streetwork
 
+## Was ist FIDAA? Wie funktioniert die App technisch, und wer steht hinter dem Projekt bzw. wen kann ich dazu kontaktieren?
+
+FIDAA (**F**ach**i**nformation **D**igitale **A**ufsuchende **A**rbeit) ist das wissensbasierte KI-Tool des
+Forschungs- und Transferprojekts DEMO-WORK. Es ist ein Chat-Assistent zum Thema Digital Streetwork (DS) –
+ein Kompetenzbot für aufsuchende digitale Arbeit, Radikalisierungsprävention, Empowerment und
+Netzwerkarbeit. FIDAA beantwortet Fragen aus einer kuratierten, fachlich geprüften Wissensdatenbank, die
+vom Projekt DEMO-WORK zusammengetragen und entwickelt wurde. Es dient Praktiker\*innen zur Orientierung,
+Einarbeitung und Reflexion: FIDAA informiert und verweist gegebenenfalls auf externe Anlaufstellen,
+erbringt aber keine Beratung (keine Seelsorge, Rechtsberatung oder psychische Unterstützung), und eine
+automatisierte Kommunikation mit Adressat\*innen oder Klient\*innen ist explizit ausgeschlossen.
+
+**Konzept (RAG)**
+FIDAA arbeitet mit Retrieval-Augmented Generation (RAG):
+
+1. Beim Start wird die Wissensdatenbank (Markdown-Dateien) in Abschnitte zerlegt und über ein
+   Embedding-Modell in Vektoren verwandelt, die in einer Vektordatenbank (pgvector in PostgreSQL)
+   abgelegt werden.
+2. Auf jede Nutzerfrage hin werden die semantisch passendsten Abschnitte abgerufen und dem
+   Sprachmodell als Kontext mitgegeben.
+3. Das Sprachmodell formuliert die Antwort ausschließlich auf Basis dieses Kontexts: Der Systemprompt
+   verpflichtet es, vor jeder Antwort mindestens einmal die Wissensdatenbank zu durchsuchen und sich
+   in der Antwort auf den Kontext zu beziehen. Das reduziert typische Sprachmodell-Fehler wie
+   Halluzinationen oder Falschinformationen.
+
+**Technik-Stack**
+
+| Baustein | Technologie |
+| --- | --- |
+| Chat-Oberfläche | Chainlit (Web-Chat mit Streaming, sichtbaren Recherche-Schritten, Feedback-Buttons und HTML-Export der Konversation) |
+| Backend | Python, Abhängigkeiten verwaltet mit uv (pinned via uv.lock) |
+| Sprachmodell | OpenAI-kompatible LLM-API, bereitgestellt von der Hochschule Magdeburg-Stendal (h2.de); die h2 aktualisiert die API laufend, um jeweils die aktuellsten Open-Weight-Modelle bereitzustellen (aktuelles Standardmodell: Qwen-3.8). Beim Start erkennt die App automatisch alle nutzbaren Modelle (Chat + Tool-Nutzung + Reasoning). |
+| Agentik | OpenAI-native Function Calling – pro Nachricht sind bis zu 7 Agenten-Schritte (LLM-Aufrufe) möglich |
+| Embedding | OpenAI-kompatible Embedding-API (ebenfalls über h2.de), Modell Qwen3-Embedding-4B, instruktionsbasiert: die Suchanfrage wird mit einer Aufgaben-Instruktion eingebettet |
+| Vektordatenbank | pgvector in PostgreSQL (Collections: `rag_context`, `rag_bibliography`, optional `rag_documents`) |
+
+**Werkzeuge (Tools) des Agenten**
+
+* `search_context`: Durchsucht die interne Wissensdatenbank zu Digital Streetwork (geprüftes Fachwissen).
+* `search_bibliography`: Durchsucht die Bibliografie nach der exakten Quellenangabe eines Werks (Autor,
+  Jahr, Titel) – wird genutzt, wenn FIDAA eine konkrete Quelle referenzieren soll.
+* `search_documents`: Durchsucht optional ein externes Dokumentenarchiv (nur aktiv, wenn konfiguriert).
+
+**Wissensbasis**
+Die Wissensdatenbank wurde vom Projekt DEMO-WORK zusammengetragen und entwickelt:
+
+* `knowledge/kontext.md`: kuratierte deutschsprachige Wissensdatenbank zu Digital Streetwork
+  (u. a. Professionalisierung, Qualitätsstandards, Zielgruppen, Plattformen, Evaluation, Finanzierung,
+  Arbeitsschutz), lizenziert unter CC BY-SA 4.0.
+* `knowledge/bibliography.md`: über 140 Werke der Fachliteratur mit Kurzbeschreibung, gegliedert nach
+  Handlungsfeldern und Zielgruppen.
+* `knowledge/systemprompt.md`: definiert Rolle und Verhalten von FIDAA (rein informativ, Sprache der
+  Nutzenden spiegeln, Antworten in schlichtem Markdown).
+
+**Projekt, Software & Kontakt**
+
+* FIDAA ist Teil von **DEMO-WORK** – einem von der **VolkswagenStiftung** geförderten Forschungs- und
+  Transferprojekt in Kooperation zwischen der Hochschule Magdeburg-Stendal, der Amadeu Antonio Stiftung
+  und der Katholischen Hochschule Nordrhein-Westfalen (katho). Das Vorhaben ist assoziiert mit dem Institut
+  für demokratische Kultur (IdK) der Hochschule Magdeburg-Stendal und sammelt und systematisiert das
+  verstreute Fach- und Praxiswissen der digitalen Radikalisierungsprävention.
+* Projektinformationen, das Team (Wissenschaft und Praxis) sowie Kontakt (Impressum) finden sich auf
+  der Projektseite <https://demo-work.h2.de> (Englisch: <https://demo-work.h2.de/en/>)
+* Konkrete Kontaktdaten (E-Mail-Adressen, Telefonnummern, Anschriften) sind in dieser Wissensdatenbank
+  bewusst nicht hinterlegt: Alle Ansprechpartner:innen und Kontaktmöglichkeiten sind auf der Projektseite
+  <https://demo-work.h2.de> veröffentlicht (u. a. im Impressum und in den Team-Beschreibungen). Auf
+  Nachfrage verweist FIDAA dorthin und erfindet selbst keine Kontaktdaten.
+* Die Software ist Open Source (Code: EUPL 1.2, Wissensinhalte: CC BY-SA 4.0):
+  <https://github.com/DEMO-WORK-DS/FIDAA>
+* Für Projektinteresse, Kooperationen oder weiterführende Informationen bitte über die Projektseite
+  <https://demo-work.h2.de> Kontakt aufnehmen; technische Fragen und Fehlermeldungen können im
+  GitHub-Repository (Issues) eingereicht werden.
+
 ## Wie kann ich Digital Streetwork gut fachlich absichern?
 
 Der Begriff *Digital Streetwork* ist weder rechtlich noch fachlich geschützt. Dennoch kann und sollte er genutzt werden und dabei kann man sich auch auf wissenschaftliche Publikation bezogen werden (Quelle 1: <https://share.google/LibXqGd6deFgpfLVu> Quelle 2: <https://share.google/ZUD4gTkycmDTtte2K>). Auch gängig sind die Begriffe *Onlinestreetwork*, *Streetwork im Netz* oder auch *digital virtuell aufsuchende Soziale Arbeit*. Alle sind nicht in einem fachlichen Konsens abgesichert, können aber trotzdem genutzt werden, um aufsuchende Soziale Arbeit durch das Mittel der Sozialen Medien zu nutzen. Es gibt jedoch Bezüge zu den fachlichen Standards des BAG Streetwork, die als Referenzrahmen herangezogen werden können. Da das Feld stark heterogen ist – von ehrenamtlichen Einzelpersonen bis zu ausgebildeten Sozialpädagog\*innen –, ist es wichtig, intern klare Mindestanforderungen zu definieren: an Ausbildung, Dokumentation, Datenschutz und ethische Grundsätze. Den Referenzrahmen des BAG Streetworks findest du hier: https://bag-streetwork.de/wp-content/uploads/2023/08/Fachstandards\_BAG\_2018.pdf

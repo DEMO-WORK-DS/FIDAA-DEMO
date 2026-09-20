@@ -5,6 +5,19 @@ Verwendet OpenAI-kompatibles Backend für Chat-Streaming (mit Thinking & Tooluse
 Langchain RAG wird bei Start aus Dokumenten geladen und in via pgvector in Postgresdatenbank aufgebaut.
 Containerisiert mit Docker.
 
+## Project
+
+FIDAA ist das wissensbasierte KI-Tool des von der VolkswagenStiftung geförderten
+Forschungs- und Transferprojekts [DEMO-WORK](https://demo-work.h2.de) – einer Kooperation
+zwischen der Hochschule Magdeburg-Stendal, der Amadeu Antonio Stiftung und der
+Katholischen Hochschule Nordrhein-Westfalen (katho), assoziiert mit dem Institut für
+demokratische Kultur (IdK) der Hochschule Magdeburg-Stendal.
+
+DEMO-WORK sammelt und systematisiert das verstreute Fach- und Praxiswissen der digitalen
+Radikalisierungsprävention (Digital Streework) und macht es über FIDAA zugänglich.
+Projektinformationen, das Team und der Kontakt (Impressum) sind auf der Projektseite
+veröffentlicht: <https://demo-work.h2.de> (Englisch: <https://demo-work.h2.de/en/>)
+
 ## Quickstart
 
 ```bash
