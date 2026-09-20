@@ -38,12 +38,12 @@ OpenAI-compatible, self-hosted LLM API. RAG via LangChain into PGVector
 
 - For major changes, always propose a structured plan to the user (maintainer). 
   Explain what changes should be made, what's their purpose and how it will be
-  kept minimal, to avaoid an explosion in complexity.
+  kept minimal, to avoid an explosion in complexity.
 - Before implementing big parts of new functionality, check online, if you can
-  find well-known and widely used libraries that allready could fulfill that 
+  find well-known and widely used libraries that already could fulfill that 
   purpose. Evaluate the libraries against each other and against potential 
   custom code. Present the finding to the user/maintainer and support them 
-  making an informed decision, before proceding with implementation.
+  making an informed decision, before proceeding with implementation.
 - For every code change, add a short comment at the changed location that
   documents its purpose (what it does and why).
 - Show the diff to the maintainer and wait for review. Never `git push` to
