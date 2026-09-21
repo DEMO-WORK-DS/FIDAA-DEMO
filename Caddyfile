@@ -15,12 +15,27 @@
     log {
         format json
     }
-    reverse_proxy app:8000
+    # Admin-Panel (admin.py, uvicorn :8001): die ganze /admin*-Familie
+    # geht an das Panel; es bedient selbst nur /admin-<ADMIN_SALT>
+    # (Salt aus secrets.env = URL-Versteckung). Alle anderen Pfade zeigen
+    # eine identische, aber nicht-funktionsfähige Tarn-Login-Page.
+    # Alle übrigen Pfade gehen an die Chat-App.
+    handle /admin* {
+        reverse_proxy admin:8001
+    }
+    handle {
+        reverse_proxy app:8000
+    }
 }
 
 :80 {
     log {
         format json
     }
-    reverse_proxy app:8000
+    handle /admin* {
+        reverse_proxy admin:8001
+    }
+    handle {
+        reverse_proxy app:8000
+    }
 }

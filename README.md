@@ -37,6 +37,24 @@ docker compose up -d
 Siehe [`secrets.env.example`](secrets.env.example) für Einstellungen durch Environment Variablen.
 Siehe [`knowledge`](knowledge) für Markdown-Dateien die Wissen und Verhalten des Chatbots steuern.
 
+## Admin-Panel
+
+Ein eigenes, kleines Web-Panel ([`admin.py`](admin.py), ohne LLM) zum Anlegen von
+Testnutzern, von Caddy unter `https://<host>/admin-<ADMIN_SALT>` geroutet.
+
+* `ADMIN_SALT` in `secrets.env`: zufälliger Pfad-Suffix als URL-Versteckung
+  (z. B. `7493` → `https://<host>/admin-7493`). Leer → Panel deaktiviert.
+  Falsche Pfade (`/admin`, `/admin-1234`, …) zeigen eine identische,
+  aber nicht-funktionsfähige Tarn-Login-Page – für Angreifer nicht
+  unterscheidbar vom echten Panel.
+* `ADMIN_USERS` in `secrets.env`: wer sich anmelden darf (gleiche
+  `E-Mail:Passwort`-Form wie `SEED_USERS`, wird wie diese beim Start angelegt).
+* `ADMIN_SESSION_SECRET` in `secrets.env`: HMAC-Schlüssel für das
+  Session-Cookie.
+* Im Panel E-Mail-Adressen einfügen (eine pro Zeile), optional ein
+  gemeinsames Passwort setzen (leer = zufällig pro Nutzer, einmalig angezeigt).
+  Angelegte Nutzer können sich direkt im Chat anmelden.
+
 ## License
 
 Dieses Projekt benutzt ein Dual-Lizenz-Modell, um Software- und Textinhalte mit entsprechend angemessenen Lizenzen zu versehen.

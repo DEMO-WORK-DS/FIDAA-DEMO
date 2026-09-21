@@ -23,6 +23,7 @@ services:
       - frontend
     depends_on:
       - app
+      - admin
     restart: unless-stopped
 
   app:
@@ -49,6 +50,29 @@ services:
       # CHAINLIT_AUTH_SECRET is auto-generated at runtime if unset.
       # Set it in secrets.env to persist sessions across container restarts.
       # DOCUMENTS_PATH: /app/documents  # optional: folder of .md files for document search
+    networks:
+      - frontend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Admin-Panel (eigenes FastAPI-App admin.py, kein LLM), von Caddy
+  # unter /admin geroutet – keine Host-Ports. ADMIN_USERS und
+  # ADMIN_SESSION_SECRET kommen aus secrets.env (leer = Panel deaktiviert).
+  admin:
+    build: .
+    command: uvicorn admin:app --host 0.0.0.0 --port 8001
+    volumes:
+      - .:/app
+    env_file:
+      - path: secrets.env
+        required: false
+    environment:
+      PYTHONUNBUFFERED: "1"
+      # Wie bei app: Default ist der lokale postgres-Service.
+      # LLM-Variables werden nicht gebraucht.
+      DATABASE_URL: "${DATABASE_URL:-postgresql://appuser:change-me@postgres:5432/chat}"
     networks:
       - frontend
     depends_on:
