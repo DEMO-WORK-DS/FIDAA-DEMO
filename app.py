@@ -225,6 +225,15 @@ _MCP_STEP_NAMES = {
     "search_context": "🔍 Kontextsuche",
     "search_bibliography": "📚 Bibliographiesuche",
     "search_documents": "📄 Dokumentensuche",
+    "list_sections": "📑 Inhaltsverzeichnis",
+}
+
+# German display names for the FIDAA collections inside the TOC step
+# (the server returns the internal names; display-only mapping for the UI).
+_MCP_COLLECTION_LABELS = {
+    "context": "Kontextdatenbank",
+    "bibliography": "Bibliografie",
+    "documents": "Dokumentenarchiv",
 }
 
 # Populated at startup from the MCP server's list_tools() — the server is
@@ -688,9 +697,11 @@ async def _mcp_tool_step(tc: dict) -> str:
 
         # The FIDAA server returns structured output
         # {results: [{heading_path, text}]} (parity with the old retriever
-        # shape); fall back to raw text content blocks for tools that
-        # don't.
+        # shape); list_sections returns {collections: [{name, headings}]}
+        # and is rendered as a Markdown outline; anything else falls back
+        # to the raw text content blocks.
         structured = getattr(result, "structuredContent", None)
+        header = f"**Suchanfrage:** `{query}`\n### 🔍 Gefundene Quellen\n"
         if structured and "results" in structured:
             results = structured["results"]
             result_text = "\n\n---\n\n".join(r["text"] for r in results)
@@ -698,16 +709,43 @@ async def _mcp_tool_step(tc: dict) -> str:
             for i, r in enumerate(results, 1):
                 heading = " > ".join(filter(None, r.get("heading_path", [])))
                 sources.append(f"#### {i}. `{heading}`\n```markdown\n{r['text']}\n```")
+        elif structured and "collections" in structured:
+            # list_sections (M4, R6.5): render the TOC as a Markdown
+            # outline (bold chapter, indented subsections) instead of the
+            # raw JSON block; the LLM consumes the same outline as its
+            # tool result.
+            toc: list[str] = []
+            for col in structured["collections"]:
+                label = _MCP_COLLECTION_LABELS.get(col["name"], col["name"])
+                toc.append(
+                    f"#### {label} — {len(col['headings'])} Abschnitte"
+                )
+                # Group by top-level heading: one bold parent line per
+                # chapter, one indented line per subsection.
+                groups: dict[str, list[list[str]]] = {}
+                for h in col["headings"]:
+                    groups.setdefault(h[0], []).append(h[1:])
+                for top, subs in groups.items():
+                    if subs == [[]]:
+                        toc.append(f"- {top}")  # chapter without subsections
+                    else:
+                        toc.append(f"- **{top}**")
+                        for sub in subs:
+                            if sub:
+                                toc.append(f"  - {' > '.join(sub)}")
+            header = (
+                f"**Sammlung:** `{parsed_args.get('collection', 'all')}`\n"
+                "### 📑 Inhaltsverzeichnis\n"
+            )
+            result_text = "\n".join(toc)
+            sources = [result_text]
         else:
             result_text = "\n\n---\n\n".join(
                 b.text for b in result.content if getattr(b, "type", "") == "text"
             )
             sources = [result_text] if result_text else []
 
-        step.output = (
-            f"**Suchanfrage:** `{query}`\n### 🔍 Gefundene Quellen\n"
-            + "\n".join(sources)
-        )
+        step.output = header + "\n".join(sources)
 
     return result_text
 
