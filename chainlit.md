@@ -14,12 +14,21 @@ Stellen Sie mir einfach eine Frage – oder wählen Sie unten einen Vorschlag au
 
 ## Projekt & Kontakt
 
-FIDAA ist Teil von **DEMO-WORK** – einem von der **VolkswagenStiftung** geförderten Forschungs- und
-Transferprojekt in Kooperation zwischen der Hochschule Magdeburg-Stendal, der Amadeu Antonio
-Stiftung und der Katholischen Hochschule Nordrhein-Westfalen (katho).
+FIDAA ist Teil von **DEMO-WORK** – einem von der **VolkswagenStiftung**
+geförderten Forschungs- und Transferprojekt in Kooperation von:
+
+- **Hochschule Magdeburg-Stendal (h2)** – Projektstandort; betreibt die
+  Plattform und die KI-Infrastruktur (LLM- und Embedding-API).
+- **Amadeu Antonio Stiftung** – Praxis-Expertise; Mitentwicklung des
+  Konzepts „Digital Streetwork".
+- **Katholische Hochschule Nordrhein-Westfalen (katho)** – verantwortet die
+  Zusammenführung der wissenschaftlichen und praktischen Erkenntnisse.
+
+Außerdem:
 
 - **Web-App (Sie sind hier):** [fidaa.h2.de](https://fidaa.h2.de)
-- **Projektseite** (Projektinformationen, Team, Kontakt/Impressum): [demo-work.h2.de](https://demo-work.h2.de)
+- **Projektseite** (Projektinformationen, Team, Kontakt/Impressum):
+  [demo-work.h2.de](https://demo-work.h2.de)
   (Englisch: [demo-work.h2.de/en/](https://demo-work.h2.de/en/))
 
 ## Open Source & Wiederverwendung
