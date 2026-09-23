@@ -60,9 +60,8 @@ PGVector in this repo.
   (`/healthz` = index built). If `fidaa` is unhealthy, check
   `docker compose logs fidaa` first.
 - The variant with a VPN sidecar (app reaches the LLM API through a
-  GlobalProtect tunnel) exists in the upstream `chainlit-rag-vpn` repo
-  (branch `legacy-vpn-sidecar`). Do not reintroduce proxy/VPN handling into
-  `main`.
+  GlobalProtect tunnel) is archived on branch `legacy-vpn-sidecar` of
+  this repo. Do not reintroduce proxy/VPN handling into `main`.
 
 ## Change workflow (required)
 
