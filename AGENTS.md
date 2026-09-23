@@ -42,7 +42,12 @@ PGVector in this repo.
 - The knowledge base (content files + MCP server + AGENTS.md + skill) lives
   in the git submodule `fidaa/` (the FIDAA repo). Content or server changes:
   make and commit them inside `fidaa/` first, then update the submodule
-  pointer in this repo. Never hand-edit `fidaa/` and commit the edits here.
+  pointer in this repo. The `fidaa` compose service mounts
+  `./fidaa:/app:ro` over the image's baked copy (the venv is baked at
+  `/opt/venv`, outside `/app`), so on a deployment machine a content or
+  server-code change needs only `pull` + `docker compose restart fidaa`
+  (then `restart app`) — no image rebuild. Rebuild `fidaa` only for
+  dependency changes (`uv.lock`) or Dockerfile changes. Never hand-edit `fidaa/` and commit the edits here.
 - `app.py` reads `fidaa/knowledge/systemprompt.md` (system prompt) and
   `fidaa/knowledge/prompts.md` (chat starters) directly; the retrievable
   content (kontext.md, bibliography.md) is indexed only by the fidaa server.

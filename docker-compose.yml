@@ -33,6 +33,12 @@ services:
   # host ports, no Caddy route.
   fidaa:
     build: ./fidaa
+    volumes:
+      # Content + server code come from the working tree (like app/admin),
+      # so knowledge updates need only pull + restart — no image rebuild.
+      # The image's baked copy stays as a standalone fallback; the venv is
+      # baked at /opt/venv (outside /app) and is unaffected by this mount.
+      - ./fidaa:/app:ro
     env_file:
       - path: secrets.env
         required: false
