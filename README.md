@@ -68,6 +68,6 @@ Dieses Projekt benutzt ein Dual-Lizenz-Modell, um Software- und Textinhalte mit 
 | Component                                                        | License          | File                                   |
 |------------------------------------------------------------------|------------------|----------------------------------------|
 | Source code (`app.py`, `Dockerfile`, `docker-compose.yml`, etc.) | **EUPL 1.2**     | [LICENSE](LICENSE)                     |
-| Knowledge content (`fidaa/knowledge/*.md`)                       | **CC BY-SA 4.0** | [fidaa/knowledge/LICENSE](fidaa/knowledge/LICENSE) |
+| Knowledge content (`fidaa/knowledge/*.md`)                       | **CC BY-SA 4.0** | [fidaa/LICENSE](fidaa/LICENSE)             |
 
 *Both licenses are open source (OSI-approved) and permit commercial use with attribution. The EUPL closes the SaaS loophole. Modified versions hosted as a service must remain open source.*
