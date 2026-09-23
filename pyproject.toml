@@ -2,21 +2,29 @@
 # Copyright (C) 2026 FIDAA contributors — https://eupl.eu/1.2/en/
 
 [project]
-name = "chainlit-rag-chat"
+name = "fidaa-demo"
 version = "0.1.0"
-description = "Chainlit RAG Agent with OpenAI-native streaming + LangChain RAG"
+description = "Chainlit agent app for FIDAA (MCP-based RAG via the fidaa knowledge server)"
 readme = "README.md"
 license = "EUPL-1.2-only"
 license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
-    "chainlit",
+    # 2.12.0: CVE-2026-45018/-45019 fixes + native MCP surface (features.mcp
+    # config, McpSession, on_mcp_connect). The legacy pre-2.12 MCP config
+    # keys are rejected loudly by this version, so .chainlit/config.toml
+    # uses the 2.12-standard [[features.mcp.servers]] block.
+    "chainlit==2.12.0",
+    # Direct dependency: app.py opens the MCP connection itself (D1.5).
+    # Matches chainlit 2.12's own pin (mcp>=1.28.1,<2) — the 1.x line.
+    "mcp>=1.28.1,<2",
     "bcrypt",
-    "langchain",
-    "langchain-openai",
-    "langchain-text-splitters",
-    "langchain-community",
-    "langchain-postgres",
+    # Chainlit 2.12 only ships asyncpg under its `custom-data` extra, but
+    # get_data_layer() imports it unconditionally and the data layer is
+    # active here (DATABASE_URL is set -> ChainlitDataLayer on postgres;
+    # init.sql creates its tables, the transcript export queries them).
+    # Pin to chainlit's own custom-data constraint.
+    "asyncpg>=0.30.0,<1.0.0",
     "openai",
     "httpx[socks]",
     "email-validator",

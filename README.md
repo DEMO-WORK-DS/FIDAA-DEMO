@@ -1,8 +1,10 @@
 # FIDAA -- **F**ach**i**nformation **D**igitale **A**ufsuchende **A**rbeit
 
-Chainlit RAG Agent für einfaches Information Retrieval im Chat-Format aus einer vorgegebenen, geprüften Wissensadatenbank.
-Verwendet OpenAI-kompatibles Backend für Chat-Streaming (mit Thinking & Tooluse) sowie Embedding.
-Langchain RAG wird bei Start aus Dokumenten geladen und in via pgvector in Postgresdatenbank aufgebaut.
+Chainlit Agent für Information Retrieval im Chat-Format aus einer vorgegebenen, geprüften Wissensdatenbank.
+Verwendet OpenAI-kompatibles Backend für Chat-Streaming (mit Thinking & Tooluse).
+Wissenszugriff übernimmt der FIDAA-Knowledge-Server (MCP, Git-Submodul [`fidaa/`](fidaa)):
+die Tools `search_context` / `search_bibliography` (+ optional `search_documents`)
+mit In-Memory-Vektorindex, der bei jedem Start neu aufgebaut wird.
 Containerisiert mit Docker.
 
 ## Project
@@ -26,6 +28,9 @@ cp secrets.env.example secrets.env
 
 # Fill out secrets.env!
 
+# (Re-)initialize the knowledge submodule (after clone / pull)
+git submodule update --init fidaa
+
 # Start services
 docker compose up -d
 
@@ -35,7 +40,8 @@ docker compose up -d
 ## Configuration
 
 Siehe [`secrets.env.example`](secrets.env.example) für Einstellungen durch Environment Variablen.
-Siehe [`knowledge`](knowledge) für Markdown-Dateien die Wissen und Verhalten des Chatbots steuern.
+Siehe [`fidaa/knowledge`](fidaa/knowledge) (im Submodul, eigenes Repo) für die
+Markdown-Dateien, die Wissen und Verhalten des Chatbots steuern.
 
 ## Admin-Panel
 
@@ -62,6 +68,6 @@ Dieses Projekt benutzt ein Dual-Lizenz-Modell, um Software- und Textinhalte mit 
 | Component                                                        | License          | File                                   |
 |------------------------------------------------------------------|------------------|----------------------------------------|
 | Source code (`app.py`, `Dockerfile`, `docker-compose.yml`, etc.) | **EUPL 1.2**     | [LICENSE](LICENSE)                     |
-| Knowledge content (`knowledge/*.md`)                             | **CC BY-SA 4.0** | [knowledge/LICENSE](knowledge/LICENSE) |
+| Knowledge content (`fidaa/knowledge/*.md`)                       | **CC BY-SA 4.0** | [fidaa/knowledge/LICENSE](fidaa/knowledge/LICENSE) |
 
 *Both licenses are open source (OSI-approved) and permit commercial use with attribution. The EUPL closes the SaaS loophole. Modified versions hosted as a service must remain open source.*

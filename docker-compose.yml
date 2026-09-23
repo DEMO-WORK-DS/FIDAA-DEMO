@@ -26,6 +26,44 @@ services:
       - admin
     restart: unless-stopped
 
+  # FIDAA knowledge server (MCP) — the git submodule `fidaa/`. Serves the
+  # knowledge base as MCP tools (search_context, search_bibliography,
+  # optionally search_documents) on the internal network; the in-memory
+  # index is rebuilt at every boot (no PG). Only the app talks to it — no
+  # host ports, no Caddy route.
+  fidaa:
+    build: ./fidaa
+    env_file:
+      - path: secrets.env
+        required: false
+    environment:
+      PYTHONUNBUFFERED: "1"
+      # Host allowlist for the MCP transport-security guard: the compose
+      # service name (the app connects as Host "fidaa:8002") plus local
+      # probes for the healthcheck below.
+      MCP_ALLOWED_HOSTS: "fidaa,localhost,127.0.0.1"
+      # LLM_URL, LLM_KEY, EMBEDDING_MODEL, USE_EMBED_INSTRUCTIONS,
+      # DEFAULT_TASK_INSTRUCTION come from secrets.env (shared with the
+      # app service).
+      # Optional: bearer-token gate for /mcp. The demo app does NOT
+      # forward tokens — leave empty in v1 (see fidaa/secrets.env.example).
+      # MCP_TOKEN: ""
+      # Optional: folder of .md files for a third search_documents tool
+      # (mount a volume first, e.g. ./documents:/app/documents:ro).
+      # DOCUMENTS_PATH: /app/documents
+    healthcheck:
+      # /healthz returns 200 only once the in-memory index is built
+      # (503 with an error message while degraded).
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/healthz', timeout=5)"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      # Re-embedding at startup takes ~10-60 s depending on the LLM API.
+      start_period: 90s
+    networks:
+      - frontend
+    restart: unless-stopped
+
   app:
     build: .
     ports:
@@ -49,11 +87,14 @@ services:
       MAX_MESSAGE_LENGTH: "${MAX_MESSAGE_LENGTH:-4000}"
       # CHAINLIT_AUTH_SECRET is auto-generated at runtime if unset.
       # Set it in secrets.env to persist sessions across container restarts.
-      # DOCUMENTS_PATH: /app/documents  # optional: folder of .md files for document search
     networks:
       - frontend
     depends_on:
       postgres:
+        condition: service_healthy
+      # fidaa is healthy only once its in-memory knowledge index is built,
+      # so the app always boots against a working knowledge base.
+      fidaa:
         condition: service_healthy
     restart: unless-stopped
 

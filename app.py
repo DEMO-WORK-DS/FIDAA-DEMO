@@ -11,7 +11,7 @@
 # distributed under the Licence is distributed on an "AS IS" basis,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-"""Chainlit RAG Agent Client (OpenAI-native streaming + LangChain RAG).
+"""Chainlit FIDAA Agent Client (OpenAI-native streaming + MCP knowledge server).
 
 Run:        docker compose up
 Create user: docker compose exec app python -c "import app; app.add_user('email', 'password')"
@@ -22,12 +22,14 @@ Delete user: docker compose exec app python -c "import app; app.delete_user('ema
 # Chainlit Funktionen returnen immer Callable ohne Parameter anstatt z.B. Callable[[str, str]].
 # Das regt pyright auf. Darum ignorieren.
 
+import asyncio
 import json
 import logging
 import os
 import re
 import secrets
 import time
+from contextlib import AsyncExitStack
 from datetime import datetime
 from pathlib import Path
 
@@ -38,11 +40,17 @@ import httpx
 import peewee as pw
 import playhouse.db_url as ph_url  # pyright: ignore[reportMissingTypeStubs]  # bundled with peewee, no stubs
 from email_validator import EmailNotValidError, validate_email
-# Document: needed to build per-entry bibliography chunks (see build_bibliography)
-from langchain_core.documents import Document
-from langchain_openai import OpenAIEmbeddings
-from langchain_text_splitters import MarkdownHeaderTextSplitter
-from openai import AsyncClient, AsyncOpenAI
+from openai import AsyncOpenAI
+
+# FIDAA knowledge server (MCP, D1.5): backend-activated connection.
+# `streamablehttp_client` is the mcp 1.x-line name (Chainlit pins mcp<2);
+# the SDK v2 line renamed it to `streamable_http_client`.
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+from chainlit.config import StreamableHttpMcpServer, config
+from chainlit.mcp import HttpMcpConnection
+from chainlit.session import McpSession, stop_mcp_task
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -65,13 +73,13 @@ if not os.environ.get("CHAINLIT_AUTH_SECRET"):
     os.environ["CHAINLIT_AUTH_SECRET"] = secrets.token_urlsafe(32)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///users.db")
-DOCUMENTS_PATH = os.getenv("DOCUMENTS_PATH")
 
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "Qwen3-Embedding-4B")
+# The knowledge base (system prompt, starter prompts) now lives in the FIDAA
+# submodule; embeddings and retrieval run in the fidaa MCP server, so the
+# EMBEDDING_MODEL / USE_EMBED_INSTRUCTIONS / DEFAULT_TASK_INSTRUCTION /
+# DOCUMENTS_PATH env vars are consumed there (fidaa/secrets.env.example).
+KNOWLEDGE_DIR = Path("fidaa/knowledge")
 
-# Instructions for instruction-aware embeddings
-USE_EMBED_INSTRUCTIONS = os.getenv("USE_EMBED_INSTRUCTIONS", "true").lower() in ("true", "1", "yes")
-DEFAULT_TASK_INSTRUCTION = os.getenv("DEFAULT_TASK_INSTRUCTION", "Given a web search query, retrieve relevant passages that answer the query")
 MAX_AGENT_STEPS = 7
 
 MAX_LOGIN_ATTEMPTS = 5
@@ -204,238 +212,209 @@ def login(email: str, password: str) -> tuple[bool, str]:
 
 
 # ---------------------------------------------------------------------------
-# OpenAI-compatible tool definitions
+# FIDAA knowledge server (MCP) — D1.5 backend-activated connection
 # ---------------------------------------------------------------------------
-_TOOL_SEARCH_CONTEXT = {
-    "type": "function",
-    "function": {
-        "name": "search_context",
-        "description": "Durchsuche die interne Wissensdatenbank nach relevantem und geprüft richtigem Kontext.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Die Suchanfrage für die interne Wissensdatenbank.",
-                }
-            },
-            "required": ["query"],
-        },
-    },
+_FIDAA_MCP_NAME = "fidaa"
+# The fidaa server builds its in-memory index at boot (usually well under a
+# minute); give the initial MCP connection a generous budget.
+_MCP_CONNECT_TIMEOUT = 60.0
+
+# German display names for the tool steps in the UI (keyed by tool name;
+# unknown tools fall back to the raw name).
+_MCP_STEP_NAMES = {
+    "search_context": "🔍 Kontextsuche",
+    "search_bibliography": "📚 Bibliographiesuche",
+    "search_documents": "📄 Dokumentensuche",
 }
 
-# Bibliography tool: fetches exact source citations from
-# knowledge/bibliography.md so the model can reference a specific work
-# (author/year/title) verbatim instead of paraphrasing or inventing it.
-_TOOL_SEARCH_BIBLIOGRAPHY = {
-    "type": "function",
-    "function": {
-        "name": "search_bibliography",
-        "description": "Durchsuche die Bibliografie (knowledge/bibliography.md) nach der genauen Quellenangabe für ein bestimmtes Werk (Autor, Jahr, Titel).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Titel, Autor:in oder Stichwort des Werks, dessen Quellenangabe gesucht wird.",
-                }
-            },
-            "required": ["query"],
-        },
-    },
-}
-
-_TOOL_SEARCH_DOCUMENTS = {
-    "type": "function",
-    "function": {
-        "name": "search_documents",
-        "description": "Durchsuche das Dokumentenarchiv nach relevantem zusätzlichen Kontext.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Die Suchanfrage an das Dokumentenarchiv.",
-                }
-            },
-            "required": ["query"],
-        },
-    },
-}
-
+# Populated at startup from the MCP server's list_tools() — the server is
+# the single source of truth for tool names/descriptions. Read-only after
+# startup.
+_tools: list[dict] = []
+# The one shared MCP session for the process lifetime. Each chat registers
+# a lightweight copy in its mcp_sessions dict (see
+# _register_mcp_for_session), so per-chat cleanup cannot kill a connection
+# other chats still use.
+_mcp_shared: McpSession | None = None
+# System prompt text (fidaa/knowledge/systemprompt.md), read at startup —
+# the same file the MCP server serves as the fidaa_systemprompt prompt.
+_system_prompt: str | None = None
 # Populated at startup; read-only after that
 _startup_error: str | None = None
 _available_models: list[str] = []
-_tools: list[dict] = [_TOOL_SEARCH_CONTEXT, _TOOL_SEARCH_BIBLIOGRAPHY, _TOOL_SEARCH_DOCUMENTS]
-
-# OpenAIEmbeddings instance — populated at first call
 
 
-# OpenAIEmbeddings instance — populated at first call
-_embeddings: OpenAIEmbeddings | None = None
+async def _mcp_runner(
+    url: str,
+    headers: dict[str, str] | None,
+    ready_event: asyncio.Event,
+    stop_event: asyncio.Event,
+    result_holder: dict,
+) -> None:
+    """Background task that owns the MCP transport and ClientSession.
 
-
-# ---------------------------------------------------------------------------
-# Instruction-aware embeddings for retrieval quality
-# ---------------------------------------------------------------------------
-class InstructionAwareEmbeddings(OpenAIEmbeddings):
-    """OpenAIEmbeddings that prepends an instruction prefix to queries.
-
-    Uses the client's instruction-aware embedding endpoint when enabled.
-    Documents are embedded without the instruction prefix.
+    Mirrors Chainlit's own /mcp connect handler: the task enters all context
+    managers, calls initialize(), signals ready, then blocks on stop_event
+    and closes the exit stack in the same task that opened it (avoids the
+    cross-task cancel-scope corruption, Chainlit issue #2182).
     """
-
-    def embed_query(self, text: str, **kwargs) -> list[float]:
-        """Embed a single query - adds instruction prefix if enabled."""
-        if USE_EMBED_INSTRUCTIONS:
-            text = f"Instruct: {DEFAULT_TASK_INSTRUCTION}\nQuery: {text}"
-        return super().embed_query(text, **kwargs)
-
-    def embed_documents(self, texts: list[str], **kwargs) -> list[list[float]]:
-        """Embed multiple documents - no instruction prefix for documents."""
-        return super().embed_documents(texts, **kwargs)
-
-    async def aembed_query(self, text: str, **kwargs) -> list[float]:
-        """Async version of embed_query - adds instruction prefix if enabled."""
-        if USE_EMBED_INSTRUCTIONS:
-            text = f"Instruct: {DEFAULT_TASK_INSTRUCTION}\nQuery: {text}"
-        return await super().aembed_query(text, **kwargs)
-
-    async def aembed_documents(self, texts: list[str], **kwargs) -> list[list[float]]:
-        """Async version of embed_documents - no instruction prefix for documents."""
-        return await super().aembed_documents(texts, **kwargs)
-
-
-def _get_embeddings():
-    """Shared OpenAI-compatible embeddings instance — singleton.
-
-    Uses OpenAIEmbeddings from langchain_openai. The singleton is lost on
-    file-watcher reload, but the cached retrievers already hold their reference.
-    Instruction-aware embeddings are enabled via USE_EMBED_INSTRUCTIONS.
-    """
-    global _embeddings
-    if _embeddings is None:
-        kwargs = dict(
-            base_url=LLM_URL,
-            api_key=LLM_KEY,
-            model=EMBEDDING_MODEL,
-            check_embedding_ctx_length=False,
-            tiktoken_enabled=False,
-            chunk_size=32,
-        )
-
-        # Use InstructionAwareEmbeddings for instruction-aware embeddings
-        _embeddings = InstructionAwareEmbeddings(**kwargs)
-    return _embeddings
-
-
-def _build_vectorstore(docs, collection_name):
-    """Index docs into PGVector (production) or Chroma (SQLite fallback)."""
-    embeddings = _get_embeddings()
-
-    if isinstance(_db, pw.PostgresqlDatabase):
+    exit_stack = AsyncExitStack()
+    try:
         try:
-            from langchain_postgres.vectorstores import PGVector
-        except ImportError:
-            from langchain_community.vectorstores import PGVector
-
-        vectorstore = PGVector(
-            embeddings=embeddings,
-            connection=DATABASE_URL,
-            collection_name=collection_name,
-            pre_delete_collection=True,  # Drop old 384-dim collection, re-index
-        )
-        # Instructions: Rebuild with 2560-dim vectors
-        # pre_delete_collection=True drops the old 384-dim collection and creates new 2560-dim collection
-        if not vectorstore.similarity_search("test", k=1):
-            logger.info(
-                "Embedding documents into PGVector (collection=%r)...", collection_name
+            transport = await exit_stack.enter_async_context(
+                streamablehttp_client(url=url, headers=headers)
             )
-            vectorstore.add_documents(docs)
-    else:
-        from langchain_chroma import Chroma
+            read, write = transport[:2]
+            client = await exit_stack.enter_async_context(
+                ClientSession(read, write, sampling_callback=None)
+            )
+            await client.initialize()
+            result_holder["client"] = client
+        except BaseException as exc:
+            # First error wins; the outer finally always signals ready.
+            result_holder.setdefault("error", exc)
+            return
+        finally:
+            ready_event.set()
 
-        vectorstore = Chroma.from_documents(documents=docs, embedding=embeddings)
-
-    return vectorstore.as_retriever(search_kwargs={"k": 4})
-
-
-@cl.cache
-def build_rag():
-    """Load knowledge/kontext.md, split and index. Returns (system_prompt, retriever)."""
-    system_prompt = Path("knowledge/systemprompt.md").read_text(encoding="utf-8")
-    context_text = Path("knowledge/kontext.md").read_text(encoding="utf-8")
-
-    splitter = MarkdownHeaderTextSplitter(
-        headers_to_split_on=[("#", "Header 1"), ("##", "Header 2")]
-    )
-    docs = splitter.split_text(context_text)
-    return (system_prompt, _build_vectorstore(docs, collection_name="rag_context"))
+        await stop_event.wait()
+    except asyncio.CancelledError:
+        pass
+    finally:
+        try:
+            await exit_stack.aclose()
+        except BaseException:
+            logger.debug(
+                "Error closing MCP exit stack for %r", _FIDAA_MCP_NAME, exc_info=True
+            )
 
 
-@cl.cache
-def build_bibliography():
-    """Load knowledge/bibliography.md, index one chunk per reference entry.
+async def _connect_fidaa_mcp() -> None:
+    """Connect the shared FIDAA MCP session and build the tool schemas.
 
-    Unlike build_rag() (one chunk per H1/H2 section), each bibliography
-    entry ('* **Author (Year)**: ...' bullet) becomes its own chunk: a
-    citation must never be split across chunks, and the largest H1 section
-    (~44 KB) would exceed the 8192-token embedding limit (HTTP 400).
-    The enclosing H1 heading is kept as metadata for source attribution.
+    D1.5: native, backend-activated MCP connection — same code path and
+    semantics as a UI click: uses the developer config ([[features.mcp.servers]]
+    in .chainlit/config.toml), wraps the ClientSession in a Chainlit
+    McpSession, and fires the standard on_mcp_connect callback (tearing the
+    connection down on callback failure, like the /mcp handler does).
     """
-    bibliography_text = Path("knowledge/bibliography.md").read_text(encoding="utf-8")
+    global _tools, _mcp_shared
 
-    # H1 split keeps the thematic section as metadata; the per-entry re-split
-    # below keeps each reference intact and far below the embedding limit.
-    header_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=[("#", "Header 1")])
-    docs: list[Document] = []
-    for section in header_splitter.split_text(bibliography_text):
-        for entry in re.split(r"(?m)^(?=\* \*\*)", section.page_content):
-            entry = entry.strip()
-            if not entry:
-                continue
-            docs.append(Document(page_content=entry, metadata=dict(section.metadata)))
-    return _build_vectorstore(docs, collection_name="rag_bibliography")
-
-
-@cl.cache
-def build_document_search():
-    """Load .md files from DOCUMENTS_PATH and index. Returns retriever or None."""
-    if not DOCUMENTS_PATH:
-        return None
-
-    doc_folder = Path(DOCUMENTS_PATH)
-    if not doc_folder.exists():
-        logger.warning(
-            "DOCUMENTS_PATH %r does not exist — document search disabled.",
-            DOCUMENTS_PATH,
+    if not config.features.mcp.enabled:
+        raise RuntimeError(
+            "features.mcp.enabled ist deaktiviert — der FIDAA-Server "
+            "kann nicht verbunden werden."
         )
-        return None
-
-    md_files = sorted(doc_folder.rglob("*.md"))
-    if not md_files:
-        logger.warning(
-            "No .md files found in %r — document search disabled.", DOCUMENTS_PATH
+    server_cfg = next(
+        (s for s in config.features.mcp.servers if s.name == _FIDAA_MCP_NAME),
+        None,
+    )
+    if server_cfg is None:
+        raise RuntimeError(
+            f"MCP-Server {_FIDAA_MCP_NAME!r} fehlt in [[features.mcp.servers]] "
+            "(.chainlit/config.toml)."
         )
+    if not isinstance(server_cfg, StreamableHttpMcpServer):
+        raise RuntimeError(
+            f"MCP-Server {_FIDAA_MCP_NAME!r} muss type = 'streamable-http' sein."
+        )
+
+    ready_event = asyncio.Event()
+    stop_event = asyncio.Event()
+    result_holder: dict = {}
+    task = asyncio.create_task(
+        _mcp_runner(
+            server_cfg.url,
+            server_cfg.headers,
+            ready_event,
+            stop_event,
+            result_holder,
+        ),
+        name=f"mcp-shared-{_FIDAA_MCP_NAME}",
+    )
+
+    try:
+        await asyncio.wait_for(ready_event.wait(), timeout=_MCP_CONNECT_TIMEOUT)
+    except asyncio.TimeoutError:
+        result_holder.setdefault(
+            "error",
+            asyncio.TimeoutError(
+                f"timed out after {_MCP_CONNECT_TIMEOUT:.0f}s waiting for "
+                "the MCP connection to initialize"
+            ),
+        )
+
+    if "error" in result_holder:
+        # Bounded wait-then-cancel, same as the /mcp handler.
+        await stop_mcp_task(task, stop_event, _FIDAA_MCP_NAME)
+        raise RuntimeError(
+            f"Verbindung zum FIDAA-Server fehlgeschlagen: {result_holder['error']!s}"
+        ) from result_holder["error"]
+
+    client: ClientSession = result_holder["client"]
+
+    # Tool schemas for the OpenAI tool-calling API; the FIDAA server is the
+    # single source of truth (German names/descriptions).
+    tool_list = await client.list_tools()
+    _tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.inputSchema,
+            },
+        }
+        for t in tool_list.tools
+    ]
+
+    _mcp_shared = McpSession(
+        name=_FIDAA_MCP_NAME, client=client, task=task, stop_event=stop_event
+    )
+
+    # Fire the standard connect callback (parity with the UI connect flow).
+    if config.code.on_mcp_connect:
+        try:
+            await config.code.on_mcp_connect(
+                HttpMcpConnection(
+                    name=_FIDAA_MCP_NAME,
+                    url=server_cfg.url,
+                    headers=server_cfg.headers,
+                ),
+                client,
+            )
+        except Exception:
+            await stop_mcp_task(task, stop_event, _FIDAA_MCP_NAME)
+            _mcp_shared = None
+            raise
+
+    logger.info("MCP %s connected: %d tools", _FIDAA_MCP_NAME, len(_tools))
+
+
+def _register_mcp_for_session() -> None:
+    """Attach the shared FIDAA MCP session to the current chat session.
+
+    A lightweight copy is stored under the server name: on session cleanup
+    (WebsocketSession.delete) close() is called on the copy, which is a
+    no-op (its task is already finished), while the real shared connection
+    keeps running for all other chats. Tool dispatch reads the session's
+    mcp_sessions entry, so a connection the user establishes via the UI
+    (POST /mcp) transparently takes precedence for that chat.
+    """
+    if _mcp_shared is None:
+        return
+
+    async def _noop() -> None:
+        # Pre-completed task: makes McpSession.close() a no-op for the copy.
         return None
 
-    splitter = MarkdownHeaderTextSplitter(
-        headers_to_split_on=[("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")]
+    session = cl.context.session
+    session.mcp_sessions[_FIDAA_MCP_NAME] = McpSession(
+        name=_FIDAA_MCP_NAME,
+        client=_mcp_shared.client,
+        task=asyncio.get_running_loop().create_task(_noop()),
+        stop_event=asyncio.Event(),
     )
-    docs = []
-    for f in md_files:
-        chunks = splitter.split_text(f.read_text(encoding="utf-8"))
-        for chunk in chunks:
-            chunk.metadata["source"] = str(f.relative_to(doc_folder))
-        docs.extend(chunks)
-
-    logger.info(
-        "Indexing %d chunks from %d files in %r.",
-        len(docs),
-        len(md_files),
-        DOCUMENTS_PATH,
-    )
-    return _build_vectorstore(docs, collection_name="rag_documents")
 
 
 def strip_reasoning_tags(text: str) -> str:
@@ -523,7 +502,7 @@ async def _init_session():
     cl.user_session.set("model", model)
     cl.user_session.set("client", _make_openai_client())
     cl.user_session.set("stop_requested", False)
-    cl.user_session.set("api_messages", [{"role": "system", "content": build_rag()[0]}])
+    cl.user_session.set("api_messages", [{"role": "system", "content": _system_prompt}])
 
     await cl.context.emitter.set_modes(
         [
@@ -549,22 +528,26 @@ async def _init_session():
         ]
     )
 
+    # D1.5: attach the shared FIDAA MCP session to this chat (covers both
+    # on_chat_start and on_chat_resume).
+    _register_mcp_for_session()
+
 
 # ---------------------------------------------------------------------------
 # App startup
 # ---------------------------------------------------------------------------
 @cl.on_app_startup
 async def startup():
-    """Initialize database, RAG, document search, and model list at server start.
+    """Initialize database, FIDAA knowledge server (MCP), and model list.
 
     On failure, sets _startup_error so on_chat_start can surface it to users.
     The GUI still starts so users get a visible error instead of a dead server.
     """
-    global _startup_error, _tools, _available_models
+    global _startup_error, _tools, _available_models, _system_prompt
 
     if not isinstance(_db, pw.PostgresqlDatabase):
         logger.warning(
-            "Not using PostgreSQL — SQLite/Chroma fallback active. "
+            "Not using PostgreSQL — SQLite fallback active. "
             "Not recommended for production."
         )
 
@@ -577,34 +560,19 @@ async def startup():
 
     _seed_users()
 
+    # FIDAA knowledge server: system prompt + tool schemas + shared MCP
+    # session. Hard-fail like the old RAG build — the app is useless without
+    # the knowledge base.
     try:
-        build_rag()
+        _system_prompt = (KNOWLEDGE_DIR / "systemprompt.md").read_text(encoding="utf-8")
+        await _connect_fidaa_mcp()
     except Exception:
-        logger.exception("STARTUP FAILED: RAG initialization error")
-        _startup_error = "Wissensdatenbank konnte nicht geladen werden. Bitte Administrator kontaktieren."
-        return
-
-    # Bibliography is core knowledge (committed, always present) — same
-    # hard-fail behaviour as the RAG build above.
-    try:
-        build_bibliography()
-    except Exception:
-        logger.exception("STARTUP FAILED: bibliography initialization error")
-        _startup_error = "Bibliografie konnte nicht geladen werden. Bitte Administrator kontaktieren."
-        return
-
-    try:
-        build_document_search()
-    except Exception:
-        logger.exception(
-            "STARTUP WARNING: document search initialization failed — disabled"
+        logger.exception("STARTUP FAILED: FIDAA knowledge server error")
+        _startup_error = (
+            "Wissensdatenbank-Server nicht erreichbar. "
+            "Bitte Administrator kontaktieren."
         )
-
-    # Bibliography tool is registered unconditionally (core knowledge);
-    # only document search depends on the optional DOCUMENTS_PATH.
-    _tools = [_TOOL_SEARCH_CONTEXT, _TOOL_SEARCH_BIBLIOGRAPHY]
-    if build_document_search() is not None:
-        _tools.append(_TOOL_SEARCH_DOCUMENTS)
+        return
 
     _available_models = await _fetch_models()
     if not _available_models:
@@ -612,6 +580,13 @@ async def startup():
         _startup_error = (
             "Keine Sprachmodelle verfügbar. Bitte LLM-API-Verbindung prüfen."
         )
+
+
+@cl.on_app_shutdown
+async def shutdown():
+    """Close the shared FIDAA MCP connection at process shutdown."""
+    if _mcp_shared is not None:
+        await _mcp_shared.close()
 
 
 # ---------------------------------------------------------------------------
@@ -671,9 +646,17 @@ async def _thinking_step(message_content):
     return text_acc, tool_calls_acc
 
 
-async def _run_retrieval(tc, retriever):
-    """Shared retrieval logic for both tool step functions."""
-    current_step = cl.context.current_step
+async def _mcp_tool_step(tc: dict) -> str:
+    """Run one MCP tool call and render its search step in the UI.
+
+    Generic replacement for the old per-retriever step functions: the tool
+    list comes from the FIDAA server (list_tools at startup), so any tool
+    the server registers (now or later) is handled here without an app.py
+    change. The MCP client is read from the chat session's mcp_sessions
+    entry (standard Chainlit MCP pattern), falling back to the shared
+    session.
+    """
+    name = tc["name"]
 
     raw_args = tc["args"]
     try:
@@ -682,48 +665,51 @@ async def _run_retrieval(tc, retriever):
         parsed_args = {"query": raw_args}
     query = parsed_args.get("query", "")
 
-    current_step.input = query
+    # Standard Chainlit MCP lookup: mcp_sessions entries unpack as
+    # (client, sentinel).
+    entry = cl.context.session.mcp_sessions.get(_FIDAA_MCP_NAME)
+    mcp_session = entry if entry is not None else _mcp_shared
+    if mcp_session is None:
+        return "Fehler: Wissensdatenbank-Server nicht verbunden."
+    client = mcp_session.client
 
-    try:
-        docs = await cl.make_async(retriever.invoke)(query)
-        result = "\n\n---\n\n".join(d.page_content for d in docs)
-    except Exception:
-        result = "Fehler beim Abrufen des Kontexts."
-        docs = []
+    async with cl.Step(name=_MCP_STEP_NAMES.get(name, name), type="tool") as step:
+        step.input = query
+        try:
+            result = await client.call_tool(name, parsed_args)
+        except Exception:
+            logger.exception("MCP tool call %r failed", name)
+            step.output = "Fehler beim Abrufen des Kontexts."
+            return "Fehler beim Abrufen des Kontexts."
 
-    sources = []
-    for i, doc in enumerate(docs, 1):
-        path_parts = [
-            doc.metadata.get(h, "") for h in ("Header 1", "Header 2", "Header 3")
-        ]
-        heading = " > ".join(filter(None, path_parts))
-        sources.append(f"#### {i}. `{heading}`\n```markdown\n{doc.page_content}\n```")
+        if getattr(result, "isError", False):
+            step.output = "Fehler beim Abrufen des Kontexts."
+            return "Fehler beim Abrufen des Kontexts."
 
-    current_step.output = (
-        f"**Suchanfrage:** `{query}`\n### 🔍 Gefundene Quellen\n" + "\n".join(sources)
-    )
-    return result
+        # The FIDAA server returns structured output
+        # {results: [{heading_path, text}]} (parity with the old retriever
+        # shape); fall back to raw text content blocks for tools that
+        # don't.
+        structured = getattr(result, "structuredContent", None)
+        if structured and "results" in structured:
+            results = structured["results"]
+            result_text = "\n\n---\n\n".join(r["text"] for r in results)
+            sources = []
+            for i, r in enumerate(results, 1):
+                heading = " > ".join(filter(None, r.get("heading_path", [])))
+                sources.append(f"#### {i}. `{heading}`\n```markdown\n{r['text']}\n```")
+        else:
+            result_text = "\n\n---\n\n".join(
+                b.text for b in result.content if getattr(b, "type", "") == "text"
+            )
+            sources = [result_text] if result_text else []
 
+        step.output = (
+            f"**Suchanfrage:** `{query}`\n### 🔍 Gefundene Quellen\n"
+            + "\n".join(sources)
+        )
 
-@cl.step(type="tool", name="🔍 Kontextsuche")
-async def _context_step(tc):
-    """Search the internal knowledge base."""
-    return await _run_retrieval(tc, build_rag()[1])
-
-
-@cl.step(type="tool", name="📚 Bibliographiesuche")
-async def _bibliography_step(tc):
-    """Search the bibliography for an exact source citation."""
-    return await _run_retrieval(tc, build_bibliography())
-
-
-@cl.step(type="tool", name="📄 Dokumentensuche")
-async def _doc_step(tc):
-    """Search the external documents folder."""
-    retriever = build_document_search()
-    if retriever is None:
-        return "Dokumentensuche ist nicht verfügbar."
-    return await _run_retrieval(tc, retriever)
+    return result_text
 
 
 # ---------------------------------------------------------------------------
@@ -731,16 +717,23 @@ async def _doc_step(tc):
 # ---------------------------------------------------------------------------
 @cl.set_starters
 async def set_starters(user: cl.User | None = None):
-    """Parse knowledge/prompts.md into cl.Starter list."""
+    """Parse fidaa/knowledge/prompts.md into cl.Starter list.
+
+    Minimal H2 split in place of MarkdownHeaderTextSplitter (langchain is
+    gone): prompts.md is under our control — an H1 preamble followed by
+    `## title` + body sections, no code fences.
+    """
     # ignoring user-parameter, cause everyone get's the same starter
-    content = Path("knowledge/prompts.md").read_text(encoding="utf-8")
-    splitter = MarkdownHeaderTextSplitter(headers_to_split_on=[("##", "title")])
-    docs = splitter.split_text(content)
-    return [
-        cl.Starter(label=doc.metadata["title"], message=doc.page_content.strip())
-        for doc in docs
-        if "title" in doc.metadata
-    ]
+    content = (KNOWLEDGE_DIR / "prompts.md").read_text(encoding="utf-8")
+    parts = re.split(r"(?m)^##\s+", content)
+    starters = []
+    for part in parts[1:]:  # parts[0] is the preamble (H1 + comment)
+        lines = part.splitlines()
+        title = lines[0].strip()
+        message = "\n".join(lines[1:]).strip()
+        if title and message:
+            starters.append(cl.Starter(label=title, message=message))
+    return starters
 
 
 # ---------------------------------------------------------------------------
@@ -884,7 +877,7 @@ async def on_message(message: cl.Message):
 
         api_messages = cl.user_session.get("api_messages")
         if api_messages is None:
-            api_messages = [{"role": "system", "content": build_rag()[0]}]
+            api_messages = [{"role": "system", "content": _system_prompt}]
             cl.user_session.set("api_messages", api_messages)
 
         api_messages.append({"role": "user", "content": message.content})
@@ -911,14 +904,10 @@ async def on_message(message: cl.Message):
                     }
                 )
                 for tc in tool_calls_acc:
-                    if tc["name"] == "search_context":
-                        result = await _context_step(tc)
-                    elif tc["name"] == "search_bibliography":
-                        result = await _bibliography_step(tc)
-                    elif tc["name"] == "search_documents":
-                        result = await _doc_step(tc)
-                    else:
-                        result = f"Unbekanntes Tool: {tc['name']}"
+                    # Generic dispatch: the tool list comes from the FIDAA
+                    # MCP server (list_tools at startup), so no per-tool
+                    # branching here.
+                    result = await _mcp_tool_step(tc)
                     api_messages.append(
                         {
                             "role": "tool",

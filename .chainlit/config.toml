@@ -81,21 +81,16 @@ reaction_on_message_received = false
     sample_rate = 24000
 
 [features.mcp]
-    # Enable Model Context Protocol (MCP) features
-    enabled = false
+# Enable Model Context Protocol (MCP) features
+enabled = true
 
-[features.mcp.sse]
-    enabled = true
-
-[features.mcp.streamable-http]
-    enabled = true
-
-[features.mcp.stdio]
-    enabled = true
-    # Only the executables in the allow list can be used for MCP stdio server.
-    # Only need the base name of the executable, e.g. "npx", not "/usr/bin/npx".
-    # Please don't comment this line for now, we need it to parse the executable name.
-    allowed_executables = [ "npx", "uvx" ]
+[[features.mcp.servers]]
+# FIDAA knowledge server (git submodule `fidaa/`, compose service `fidaa`).
+# app.py activates this connection at startup (D1.5 backend activation);
+# the UI connect button works as well and takes over per chat.
+name = "fidaa"
+type = "streamable-http"
+url = "http://fidaa:8002/mcp"
 
 [UI]
 # Name of the assistant.
