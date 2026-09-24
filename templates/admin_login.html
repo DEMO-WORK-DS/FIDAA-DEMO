@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FIDAA Admin – Anmelden</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #f4f5f7; display: flex; justify-content: center; padding-top: 10vh; margin: 0; }
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.08); padding: 2rem; width: 22rem; }
+  h1 { font-size: 1.2rem; margin: 0 0 1rem; }
+  label { display: block; font-size: .85rem; margin: .8rem 0 .2rem; }
+  input { width: 100%; box-sizing: border-box; padding: .5rem; border: 1px solid #ccc; border-radius: 6px; }
+  button { margin-top: 1rem; width: 100%; padding: .6rem; border: 0; border-radius: 6px; background: #1d4ed8; color: #fff; font-size: .95rem; cursor: pointer; }
+  .err { color: #b91c1c; font-size: .85rem; margin-top: .8rem; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<form class="card" id="f">
+  <h1>FIDAA Admin – Anmelden</h1>
+  <label for="email">E-Mail</label>
+  <input id="email" name="email" type="email" autocomplete="username" required>
+  <label for="password">Passwort</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+  <button type="submit">Anmelden</button>
+  <div class="err" id="err"></div>
+</form>
+<script>
+document.getElementById("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = document.getElementById("err");
+  err.textContent = "";
+  const r = await fetch("__PREFIX__/login", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      email: document.getElementById("email").value,
+      password: document.getElementById("password").value,
+    }),
+  });
+  if (r.ok) { location.reload(); }
+  else {
+    const d = await r.json().catch(() => ({}));
+    err.textContent = d.error || "Anmeldung fehlgeschlagen.";
+  }
+});
+</script>
+</body>
+</html>

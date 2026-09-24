@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FIDAA Admin</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #f4f5f7; margin: 0; padding: 1.5rem; color: #111; }
+  .wrap { max-width: 46rem; margin: 0 auto; }
+  header { display: flex; justify-content: space-between; align-items: baseline; }
+  h1 { font-size: 1.2rem; margin: 0; }
+  .who { font-size: .85rem; color: #555; }
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.08); padding: 1.2rem 1.5rem; margin-top: 1rem; }
+  h2 { font-size: 1rem; margin: 0 0 .6rem; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 8rem; padding: .5rem; border: 1px solid #ccc; border-radius: 6px; font-family: ui-monospace, monospace; font-size: .85rem; }
+  input[type=password] { width: 100%; box-sizing: border-box; padding: .5rem; border: 1px solid #ccc; border-radius: 6px; }
+  label { display: block; font-size: .85rem; margin: .7rem 0 .2rem; }
+  button { margin-top: .9rem; padding: .55rem 1rem; border: 0; border-radius: 6px; background: #1d4ed8; color: #fff; cursor: pointer; }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: .6rem; }
+  td, th { text-align: left; padding: .3rem .4rem; border-bottom: 1px solid #eee; }
+  .ok { color: #15803d; } .bad { color: #b91c1c; }
+  .count { font-size: .8rem; color: #555; }
+  code { background: #f1f5f9; padding: 0 .3rem; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>FIDAA Admin</h1>
+    <div class="who">__EMAIL__ · <a href="#" id="logout">Abmelden</a></div>
+  </header>
+
+  <div class="card">
+    <h2>Testnutzer anlegen</h2>
+    <label for="emails">E-Mail-Adressen (eine pro Zeile, Kommas gehen auch)</label>
+    <textarea id="emails" placeholder="tester1@example.com&#10;tester2@example.com"></textarea>
+    <div class="count" id="count">0 Adressen</div>
+    <label for="password">Gemeinsames Passwort (optional – leer = zufällig pro Nutzer, unten angezeigt)</label>
+    <input id="password" type="password" autocomplete="new-password">
+    <button id="create">Anlegen</button>
+    <div id="result"></div>
+  </div>
+
+  <div class="card">
+    <h2>Bestehende Nutzer <span class="count" id="allcount"></span></h2>
+    <table id="all"><tr><th>E-Mail</th></tr></table>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+async function loadUsers() {
+  const r = await fetch("__PREFIX__/users");
+  if (!r.ok) { location.reload(); return; }
+  const d = await r.json();
+  $("allcount").textContent = "(" + d.count + ")";
+  const t = $("all");
+  t.innerHTML = "<tr><th>E-Mail</th></tr>";
+  for (const e of d.users) t.innerHTML += "<tr><td>" + esc(e) + "</td></tr>";
+}
+function updateCount() {
+  const n = $("emails").value.split(/[^\w.@+-]+/).filter(Boolean).length;
+  $("count").textContent = n + " Adressen";
+}
+$("emails").addEventListener("input", updateCount);
+$("create").addEventListener("click", async () => {
+  const emails = $("emails").value.split(/[^\w.@+-]+/).filter(Boolean);
+  if (!emails.length) return;
+  const r = await fetch("__PREFIX__/users", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({emails, password: $("password").value}),
+  });
+  const d = await r.json();
+  let html = "";
+  if (d.error) html += '<p class="bad">' + esc(d.error) + "</p>";
+  for (const c of d.created || [])
+    html += '<p class="ok">✔ ' + esc(c.email) + " – Passwort: <code>" + esc(c.password) + "</code></p>";
+  for (const f of d.failed || [])
+    html += '<p class="bad">✘ ' + esc(f.email) + " – " + esc(f.error) + "</p>";
+  $("result").innerHTML = html || '<p class="ok">Fertig.</p>';
+  loadUsers();
+});
+$("logout").addEventListener("click", async (e) => {
+  e.preventDefault();
+  await fetch("__PREFIX__/logout", {method: "POST"});
+  location.reload();
+});
+loadUsers();
+updateCount();
+</script>
+</body>
+</html>
