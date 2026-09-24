@@ -26,10 +26,11 @@ dependencies = [
     # Pin to chainlit's own custom-data constraint.
     "asyncpg>=0.30.0,<1.0.0",
     "openai",
-    "httpx[socks]",
+    # Plain httpx — the [socks] extra belonged to the VPN sidecar variant
+    # (archived on branch legacy-vpn-sidecar); do not reintroduce it.
+    "httpx",
     "email-validator",
     "peewee",
-    "peewee-migrate",
     "psycopg2-binary",
 ]
 
