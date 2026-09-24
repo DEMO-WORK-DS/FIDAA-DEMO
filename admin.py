@@ -38,15 +38,25 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 
-import bcrypt
-import peewee as pw
-import playhouse.db_url as ph_url  # pyright: ignore[reportMissingTypeStubs]  # bundled with peewee, no stubs
-from email_validator import EmailNotValidError, validate_email
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
+# Geteiltes Account-Storage + Auth-Primitiven (app.py nutzt dieselben
+# Tabellen): Hashing, Ratenbegrenzung und Paaren-Parsing liegen in
+# accounts.py — nur noch einmal gepflegt.
+from accounts import (
+    MAX_PASSWORD_LENGTH,
+    User,
+    add_user,
+    check_rate_limit,
+    ensure_schema,
+    parse_email_password_pairs,
+    record_failed_attempt,
+    record_successful_attempt,
+    verify_password,
+)
+
 # ── Konfiguration (secrets.env ist die Single Source of Truth) ─────────
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///users.db")
 # E-Mail:Passwort-Paare; nur diese Accounts dürfen sich am Panel anmelden.
 ADMIN_USERS = os.getenv("ADMIN_USERS", "")
 # HMAC-Schlüssel für Admin-Session-Cookies.
@@ -54,50 +64,14 @@ ADMIN_SESSION_SECRET = os.getenv("ADMIN_SESSION_SECRET", "")
 # Zufälliger Pfad-Suffix (URL-Versteckung): Panel-URL wird /admin-<ADMIN_SALT>,
 # z. B. 7493 → /admin-7493. Leerer Salt = Panel komplett deaktiviert.
 ADMIN_SALT = os.getenv("ADMIN_SALT", "")
-MAX_PASSWORD_LENGTH = int(os.getenv("MAX_PASSWORD_LENGTH", "128"))
 # Sicherheits-Obergrenze pro Anfrage: niemand pastet 10k Adressen ins Panel.
 MAX_USERS_PER_REQUEST = 100
 SESSION_TTL_SECONDS = 12 * 60 * 60
 
-# Login-Ratenbegrenzung – gleiche Werte wie app.py (geteilte LoginAttempt-Tabelle).
-MAX_LOGIN_ATTEMPTS = 5
-LOGIN_LOCKOUT_SECONDS = 300
-
-_db: pw.Database = ph_url.connect(DATABASE_URL)
-
-
-class User(pw.Model):
-    """Gleiche Tabelle wie in app.py (Peewee-Default: kleingeschriebener Klassenname)."""
-
-    email: pw.CharField = pw.CharField(primary_key=True)
-    password: pw.CharField = pw.CharField()
-
-    class Meta:
-        database = _db
-        table_name = "user"
-
-
-class LoginAttempt(pw.Model):
-    email = pw.CharField(primary_key=True)
-    attempts = pw.IntegerField(default=0)
-    last_attempt = pw.FloatField(default=0)
-
-    class Meta:
-        database = _db
-        table_name = "loginattempt"
-
-
 # ── Admin-Konten ────────────────────────────────────────────────────────
 def _admin_pairs() -> dict[str, str]:
     """ADMIN_USERS → {email: password} (kommagetrennte Paare wie SEED_USERS)."""
-    pairs: dict[str, str] = {}
-    for part in ADMIN_USERS.split(","):
-        part = part.strip()
-        if not part or ":" not in part:
-            continue
-        email, _, password = part.partition(":")
-        pairs[email.strip()] = password.strip()
-    return pairs
+    return dict(parse_email_password_pairs(ADMIN_USERS))
 
 
 def seed_admin_users() -> None:
@@ -109,44 +83,28 @@ def seed_admin_users() -> None:
     """
     for email, password in _admin_pairs().items():
         try:
-            validate_email(email, check_deliverability=False)
-        except EmailNotValidError:
+            add_user(email, password)
+        except ValueError:
             print(f"admin: ungültige Admin-E-Mail {email!r}, übersprungen", flush=True)
             continue
-        hashed = bcrypt.hashpw(password[:MAX_PASSWORD_LENGTH].encode(), bcrypt.gensalt()).decode()
-        User.insert(email=email, password=hashed).on_conflict(
-            conflict_target=[User.email],
-            update={User.password: hashed},
-        ).execute()
         print(f"admin: Admin {email} seeded", flush=True)
 
 
 def check_credentials(email: str, password: str) -> tuple[bool, str]:
     """Login prüfen. Admin-only: nur Accounts aus ADMIN_USERS werden akzeptiert.
 
-    Ratenbegrenzung wie in app.py, über die geteilte LoginAttempt-Tabelle.
+    Ratenbegrenzung wie in app.py, über die geteilte LoginAttempt-Tabelle
+    (gemeinsame Primitiven in accounts.py).
     """
     if email not in _admin_pairs():
         return False, "Kein Admin-Account."
-    attempt = LoginAttempt.get_or_none(LoginAttempt.email == email)
-    if attempt and attempt.attempts >= MAX_LOGIN_ATTEMPTS:
-        elapsed = time.time() - attempt.last_attempt
-        if elapsed < LOGIN_LOCKOUT_SECONDS:
-            remaining = int(LOGIN_LOCKOUT_SECONDS - elapsed)
-            return False, f"Account gesperrt. Erneut versuchen in {remaining} s."
-        attempt.delete_instance()
-    user = User.get_or_none(User.email == email)
-    if not user or not bcrypt.checkpw(password.encode(), user.password.encode()):
-        now = time.time()
-        LoginAttempt.insert(email=email, attempts=1, last_attempt=now).on_conflict(
-            conflict_target=[LoginAttempt.email],
-            update={
-                LoginAttempt.attempts: LoginAttempt.attempts + 1,
-                LoginAttempt.last_attempt: now,
-            },
-        ).execute()
+    allowed, remaining = check_rate_limit(email)
+    if not allowed:
+        return False, f"Account gesperrt. Erneut versuchen in {remaining} s."
+    if not verify_password(email, password):
+        record_failed_attempt(email)
         return False, "Ungültige Zugangsdaten."
-    LoginAttempt.delete().where(LoginAttempt.email == email).execute()
+    record_successful_attempt(email)
     return True, ""
 
 
@@ -339,7 +297,7 @@ _PREFIX = f"/admin-{ADMIN_SALT}" if _PANEL_ENABLED else ""
 async def lifespan(_: FastAPI):
     # Tabellen sicherstellen (geteilt mit app.py) und – nur bei aktivem
     # Panel – die Admin-Accounts seeden.
-    _db.create_tables([User, LoginAttempt], safe=True)
+    ensure_schema()
     if _PANEL_ENABLED:
         seed_admin_users()
     else:
@@ -418,17 +376,14 @@ async def create_users(request: Request) -> JSONResponse:
     created: list[dict] = []
     failed: list[dict] = []
     for email in emails:
+        password = shared or secrets.token_urlsafe(8)
         try:
-            validate_email(email, check_deliverability=False)
-        except EmailNotValidError as exc:
+            # add_user validiert die E-Mail und upsertet den bcrypt-Hash
+            # (accounts.py); ungültige Adressen landen in `failed` wie vorher.
+            add_user(email, password)
+        except ValueError as exc:
             failed.append({"email": email, "error": str(exc)})
             continue
-        password = shared or secrets.token_urlsafe(8)
-        hashed = bcrypt.hashpw(password[:MAX_PASSWORD_LENGTH].encode(), bcrypt.gensalt()).decode()
-        User.insert(email=email, password=hashed).on_conflict(
-            conflict_target=[User.email],
-            update={User.password: hashed},
-        ).execute()
         created.append({"email": email, "password": password})
     return JSONResponse({"created": created, "failed": failed})
 

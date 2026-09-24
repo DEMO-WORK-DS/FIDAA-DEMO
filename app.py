@@ -28,19 +28,31 @@ import logging
 import os
 import re
 import secrets
-import time
 from contextlib import AsyncExitStack
 from datetime import datetime
 from pathlib import Path
 
-import bcrypt
 import chainlit as cl
 import chevron
 import httpx
 import peewee as pw
-import playhouse.db_url as ph_url  # pyright: ignore[reportMissingTypeStubs]  # bundled with peewee, no stubs
-from email_validator import EmailNotValidError, validate_email
 from openai import AsyncOpenAI
+
+# Shared account storage + auth primitives (also used by admin.py) —
+# re-exported so the documented CLI calls keep working
+# (`import app; app.add_user(…)`).
+from accounts import (
+    MAX_PASSWORD_LENGTH,
+    add_user,
+    check_rate_limit,
+    db,
+    delete_user,
+    ensure_schema,
+    parse_email_password_pairs,
+    record_failed_attempt,
+    record_successful_attempt,
+    verify_password,
+)
 
 # FIDAA knowledge server (MCP, D1.5): backend-activated connection.
 # `streamablehttp_client` is the mcp 1.x-line name (Chainlit pins mcp<2);
@@ -62,7 +74,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Configuration — hard fail on secrets, SQLite fallback for DATABASE_URL
+# Configuration — hard fail on LLM secrets
 # ---------------------------------------------------------------------------
 LLM_URL = os.environ["LLM_URL"]
 LLM_KEY = os.environ["LLM_KEY"]
@@ -72,8 +84,6 @@ ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Assistant")
 if not os.environ.get("CHAINLIT_AUTH_SECRET"):
     os.environ["CHAINLIT_AUTH_SECRET"] = secrets.token_urlsafe(32)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///users.db")
-
 # The knowledge base (system prompt, starter prompts) now lives in the FIDAA
 # submodule; embeddings and retrieval run in the fidaa MCP server, so the
 # EMBEDDING_MODEL / USE_EMBED_INSTRUCTIONS / DEFAULT_TASK_INSTRUCTION /
@@ -82,9 +92,6 @@ KNOWLEDGE_DIR = Path("fidaa/knowledge")
 
 MAX_AGENT_STEPS = 7
 
-MAX_LOGIN_ATTEMPTS = 5
-LOGIN_LOCKOUT_SECONDS = 300  # 5 minutes
-MAX_PASSWORD_LENGTH = int(os.getenv("MAX_PASSWORD_LENGTH", "128"))
 MAX_MESSAGE_LENGTH = int(os.getenv("MAX_MESSAGE_LENGTH", "4000"))
 
 # Instrument OpenAI
@@ -103,111 +110,27 @@ def _make_openai_client(timeout: float = 120.0):
 
 
 # ------------------------------------------------
-# Peewee Database Management
+# Accounts (shared core: accounts.py, also used by admin.py)
 # ------------------------------------------------
-# Playhouse wechselt je nach URL den Datenbank-Typ.
-#  Default: Postgres via DATABASE_URL env variable
-#  Fallback: Sqlite users.db file
-#
-# 2 Tabellen:
-#   User (email + bcrypt hash passwort)
-#   LoginAttempt (email + failed attempts + last attempt)
-
-_db: pw.Database = ph_url.connect(DATABASE_URL)
-
-
-class User(pw.Model):
-    email: pw.CharField = pw.CharField(primary_key=True)
-    password: pw.CharField = pw.CharField()
-
-    class Meta:
-        database = _db
-
-
-class LoginAttempt(pw.Model):
-    email = pw.CharField(primary_key=True)
-    attempts = pw.IntegerField(default=0)
-    last_attempt = pw.FloatField(default=0)
-
-    class Meta:
-        database = _db
-
-
-def add_user(email: str, password: str):
-    """Füge Nutzer zur Datenbank (z.B. Postgres) hinzu.
-    on_conflict() überschreibt User, wenn bereits verfügbar. Kann also für Passwort-reset benutzt werden.
-
-    bcrypt generiert einen eigenen Salt pro User. Der Salt wird gemeinsam mit dem Hash gespeichert.
-    Scheint so industriestandard zu sein, um rainbowtable-attacks zu verhindern.
-
-    Aufruf extern:
-        docker compose exec app python -c "import app; app.add_user('david@email.de', 'password')"
-    """
-    try:
-        vmail = validate_email(email, check_deliverability=False)
-    except EmailNotValidError as exc:
-        raise ValueError(str(exc)) from exc
-    hashed = bcrypt.hashpw(
-        password[:MAX_PASSWORD_LENGTH].encode(), bcrypt.gensalt()
-    ).decode()
-    User.insert(email=email, password=hashed).on_conflict(
-        conflict_target=[User.email],
-        update={User.password: hashed},
-    ).execute()
-
-
-def delete_user(email: str):
-    """
-    Aufruf extern:
-        docker compose exec app python -c "import app; app.delete_user('email')"
-    """
-    User.delete().where(User.email == email).execute()
-    LoginAttempt.delete().where(LoginAttempt.email == email).execute()
-
-
-def _check_rate_limit(email: str) -> tuple[bool, int]:
-    """Returns (allowed, seconds_remaining)."""
-    attempt = LoginAttempt.get_or_none(LoginAttempt.email == email)
-    if not attempt:
-        return True, 0
-    if attempt.attempts >= MAX_LOGIN_ATTEMPTS:
-        elapsed = time.time() - attempt.last_attempt
-        if elapsed < LOGIN_LOCKOUT_SECONDS:
-            return False, int(LOGIN_LOCKOUT_SECONDS - elapsed)
-        attempt.delete_instance()
-    return True, 0
-
-
-def _record_failed_attempt(email: str):
-    now = time.time()
-    LoginAttempt.insert(email=email, attempts=1, last_attempt=now).on_conflict(
-        conflict_target=[LoginAttempt.email],
-        update={
-            LoginAttempt.attempts: LoginAttempt.attempts + 1,
-            LoginAttempt.last_attempt: now,
-        },
-    ).execute()
-
-
-def _record_successful_attempt(email: str):
-    LoginAttempt.delete().where(LoginAttempt.email == email).execute()
-
-
 def login(email: str, password: str) -> tuple[bool, str]:
-    """Verify credentials with rate limiting. Returns (success, error_message)."""
+    """Verify credentials with rate limiting. Returns (success, error_message).
+
+    The primitives (hashing, rate limiting, verification) are the shared
+    accounts.py core; only the password-length pre-check and the English
+    messages are app-specific (admin.py keeps its own German messages).
+    """
     if len(password) > MAX_PASSWORD_LENGTH:
         return False, "Invalid credentials"
 
-    allowed, seconds_remaining = _check_rate_limit(email)
+    allowed, seconds_remaining = check_rate_limit(email)
     if not allowed:
         return False, f"Account locked. Try again in {seconds_remaining} seconds."
 
-    user = User.get_or_none(User.email == email)
-    if not user or not bcrypt.checkpw(password.encode(), user.password.encode()):
-        _record_failed_attempt(email)
+    if not verify_password(email, password):
+        record_failed_attempt(email)
         return False, "Invalid credentials"
 
-    _record_successful_attempt(email)
+    record_successful_attempt(email)
     return True, ""
 
 
@@ -499,12 +422,7 @@ def _seed_users():
     if not raw:
         return
     count = 0
-    for pair in raw.split(","):
-        pair = pair.strip()
-        if not pair or ":" not in pair:
-            continue
-        email, _, password = pair.partition(":")
-        email, password = email.strip(), password.strip()
+    for email, password in parse_email_password_pairs(raw):
         if not email or not password:
             logger.warning("Unmatched user/password pair. Not seeded.")
             continue
@@ -574,14 +492,14 @@ async def startup():
     """
     global _startup_error, _tools, _available_models, _system_prompt
 
-    if not isinstance(_db, pw.PostgresqlDatabase):
+    if not isinstance(db, pw.PostgresqlDatabase):
         logger.warning(
             "Not using PostgreSQL — SQLite fallback active. "
             "Not recommended for production."
         )
 
     try:
-        _db.create_tables([User, LoginAttempt], safe=True)
+        ensure_schema()
     except Exception:
         logger.exception("STARTUP FAILED: database initialization error")
         _startup_error = "Datenbankfehler beim Start. Bitte Administrator kontaktieren."
@@ -829,7 +747,7 @@ def _build_export_html(thread_id: str) -> str:
     WHERE s."threadId" = %s
     ORDER BY s."startTime"
     """
-    rows = _db.execute_sql(query, (thread_id,)).fetchall()
+    rows = db.execute_sql(query, (thread_id,)).fetchall()
 
     steps = []
     for row in rows:
