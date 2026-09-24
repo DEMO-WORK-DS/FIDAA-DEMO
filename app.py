@@ -431,6 +431,26 @@ def strip_reasoning_tags(text: str) -> str:
     return re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL).strip()
 
 
+# The Chainlit 2.12 frontend (remark-directive) misparses ":word" in prose as
+# a text directive -> an empty <div>: "Streetworker:innen" loses its ":innen"
+# and the line breaks; an in-word "*" opens a stray emphasis span. Escaping
+# in-word ":" / "*" is display-neutral; code spans/fences stay verbatim.
+# ([^\W\d_] is the standard "Unicode letters" idiom: word chars minus
+# digits and underscore; the variable holds the negation core.)
+_LETTERS = r"^\W\d_"
+_MD_MARKER_RE = re.compile(rf"(?<=[{_LETTERS}])([:*])(?=[{_LETTERS}])")
+_CODE_SPAN_RE = re.compile(r"(```.*?```|`[^`\n]*`)", re.DOTALL)
+
+
+def escape_display_markers(text: str) -> str:
+    """Escape in-word ":" / "*" for display only; code spans/fences stay
+    verbatim. The LLM's conversation history keeps the raw text."""
+    esc = lambda s: _MD_MARKER_RE.sub(r"\\\1", s)
+    return "".join(
+        p if i % 2 else esc(p) for i, p in enumerate(_CODE_SPAN_RE.split(text))
+    )
+
+
 # ---------------------------------------------------------------------------
 # Model list
 # ---------------------------------------------------------------------------
@@ -683,7 +703,8 @@ async def _mcp_tool_step(tc: dict) -> str:
     client = mcp_session.client
 
     async with cl.Step(name=_MCP_STEP_NAMES.get(name, name), type="tool") as step:
-        step.input = query
+        # Display-only: see escape_display_markers (raw query stays for the MCP call).
+        step.input = escape_display_markers(query)
         try:
             result = await client.call_tool(name, parsed_args)
         except Exception:
@@ -745,7 +766,8 @@ async def _mcp_tool_step(tc: dict) -> str:
             )
             sources = [result_text] if result_text else []
 
-        step.output = header + "\n".join(sources)
+        # Rendered card only; result_text (what the LLM sees) stays raw.
+        step.output = escape_display_markers(header + "\n".join(sources))
 
     return result_text
 
@@ -957,7 +979,8 @@ async def on_message(message: cl.Message):
 
             final_text = strip_reasoning_tags(text_acc)
             api_messages.append({"role": "assistant", "content": text_acc})
-            await cl.Message(content=final_text).send()
+            # Display only: the LLM history above keeps the raw output.
+            await cl.Message(content=escape_display_markers(final_text)).send()
             return
 
         await cl.ErrorMessage(content="Fehler: Maximale Iterationen erreicht.").send()
