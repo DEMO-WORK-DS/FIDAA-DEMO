@@ -93,8 +93,9 @@ type = "streamable-http"
 url = "http://fidaa:8002/mcp"
 
 [UI]
-# Name of the assistant.
-name = "Assistant"
+# Name of the assistant. Shown as the browser tab title and link-preview
+# (og:title); the 2.12 welcome screen itself renders only the logo.
+name = "FIDAA"
 
 # default_theme = "dark"
 

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/logo_light.svg" width="128" alt="FIDAA Logo" />
+</p>
+
 # FIDAA -- **F**ach**i**nformation **D**igitale **A**ufsuchende **A**rbeit
 
 Chainlit Agent für Information Retrieval im Chat-Format aus einer vorgegebenen, geprüften Wissensdatenbank.
