@@ -28,9 +28,10 @@ services:
 
   # FIDAA knowledge server (MCP) — the git submodule `fidaa/`. Serves the
   # knowledge base as MCP tools (search_context, search_bibliography,
-  # optionally search_documents) on the internal network; the in-memory
-  # index is rebuilt at every boot (no PG). Only the app talks to it — no
-  # host ports, no Caddy route.
+  # optionally search_documents); the in-memory index is rebuilt at every
+  # boot (no PG). The app talks to it directly on the internal network;
+  # additionally Caddy exposes it under /mcp* (public, bearer-token gated
+  # for public hosts) — no host ports.
   fidaa:
     build: ./fidaa
     volumes:
@@ -45,14 +46,17 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       # Host allowlist for the MCP transport-security guard: the compose
-      # service name (the app connects as Host "fidaa:8002") plus local
-      # probes for the healthcheck below.
-      MCP_ALLOWED_HOSTS: "fidaa,localhost,127.0.0.1"
+      # service name (the app connects as Host "fidaa:8002"), local probes
+      # for the healthcheck below, and the public hostname (Caddy's /mcp*
+      # route forwards the client's Host "fidaa.h2.de" to the endpoint).
+      MCP_ALLOWED_HOSTS: "fidaa,localhost,127.0.0.1,fidaa.h2.de"
       # LLM_URL, LLM_KEY, EMBEDDING_MODEL, USE_EMBED_INSTRUCTIONS,
       # DEFAULT_TASK_INSTRUCTION come from secrets.env (shared with the
       # app service).
-      # Optional: bearer-token gate for /mcp. The demo app does NOT
-      # forward tokens — leave empty in v1 (see fidaa/secrets.env.example).
+      # Optional (NOT used in v1 — the public /mcp endpoint is open):
+      # bearer-token gate for /mcp. Set MCP_TOKEN in secrets.env to
+      # require Authorization: Bearer <token> (see
+      # fidaa/secrets.env.example).
       # MCP_TOKEN: ""
       # Optional: folder of .md files for a third search_documents tool
       # (mount a volume first, e.g. ./documents:/app/documents:ro).

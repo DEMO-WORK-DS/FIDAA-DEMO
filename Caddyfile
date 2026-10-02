@@ -23,6 +23,17 @@
     handle /admin* {
         reverse_proxy admin:8001
     }
+    # MCP-Endpunkt (fidaa-Service, streamable-HTTP :8002): öffentliche
+    # Freigabe der FIDAA-Wissensdatenbank unter /mcp — offen, ohne
+    # Authentifizierung (siehe FIDAA-README, "Public endpoint"; die
+    # LLM-API bleibt damit weiterhin von außen unerreicht).
+    # flush_interval -1: Response-Buffering abschalten, sonst staut sich
+    # das SSE-Stream-Bein von streamable-HTTP.
+    handle /mcp* {
+        reverse_proxy fidaa:8002 {
+            flush_interval -1
+        }
+    }
     handle {
         reverse_proxy app:8000
     }
@@ -34,6 +45,12 @@
     }
     handle /admin* {
         reverse_proxy admin:8001
+    }
+    # Wie auf :443: /mcp* geht an den fidaa-Server (streamable-HTTP).
+    handle /mcp* {
+        reverse_proxy fidaa:8002 {
+            flush_interval -1
+        }
     }
     handle {
         reverse_proxy app:8000

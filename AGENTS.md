@@ -13,7 +13,10 @@ chapter resources (`fidaa://context/…`) and prompts, with an in-memory
 hybrid index (vectors + BM25, RRF fusion) that is rebuilt at every boot. `app.py` activates that
 connection at startup (D1.5 backend activation, Chainlit 2.12-native MCP
 surface) and dispatches tool calls generically. There is no LangChain and no
-PGVector in this repo.
+PGVector in this repo. Caddy additionally exposes the server publicly
+under `/mcp*` (route in the Caddyfile) — open, no authentication; the
+LLM API stays unreachable from outside. See the submodule's README
+("Public endpoint") for client configs and the trade-offs.
 
 ## Commands
 
