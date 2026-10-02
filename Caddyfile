@@ -46,7 +46,9 @@
     handle /admin* {
         reverse_proxy admin:8001
     }
-    # Wie auf :443: /mcp* geht an den fidaa-Server (streamable-HTTP).
+    # Wie auf :443: /mcp* geht an den fidaa-Server (streamable-HTTP);
+    # nackte GETs ohne MCP-Session beantwortet er selbst mit der
+    # mcp-landing.html-Infoseite.
     handle /mcp* {
         reverse_proxy fidaa:8002 {
             flush_interval -1
