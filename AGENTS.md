@@ -16,7 +16,7 @@ surface) and dispatches tool calls generically. There is no LangChain and no
 PGVector in this repo. Caddy additionally exposes the server publicly
 under `/mcp*` (route in the Caddyfile) — open, no authentication; the
 LLM API stays unreachable from outside. See the submodule's README
-("Public endpoint") for client configs and the trade-offs.
+("Öffentlicher Endpunkt") for client configs and the trade-offs.
 
 ## Commands
 

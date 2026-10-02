@@ -25,7 +25,7 @@
     }
     # MCP-Endpunkt (fidaa-Service, streamable-HTTP :8002): öffentliche
     # Freigabe der FIDAA-Wissensdatenbank unter /mcp — offen, ohne
-    # Authentifizierung (siehe FIDAA-README, "Public endpoint"; die
+    # Authentifizierung (siehe FIDAA-README, "Öffentlicher Endpunkt"; die
     # LLM-API bleibt damit weiterhin von außen unerreicht).
     # flush_interval -1: Response-Buffering abschalten, sonst staut sich
     # das SSE-Stream-Bein von streamable-HTTP.

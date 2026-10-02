@@ -11,7 +11,7 @@ die Tools `search_context` / `search_bibliography` (+ optional `search_documents
 mit In-Memory-Vektorindex, der bei jedem Start neu aufgebaut wird.
 Containerisiert mit Docker.
 
-## Project
+## Projekt
 
 FIDAA ist das wissensbasierte KI-Tool des von der VolkswagenStiftung geförderten
 Forschungs- und Transferprojekts [DEMO-WORK](https://demo-work.h2.de) – einer Kooperation
@@ -24,7 +24,7 @@ Radikalisierungsprävention (Digital Streework) und macht es über FIDAA zugäng
 Projektinformationen, das Team und der Kontakt (Impressum) sind auf der Projektseite
 veröffentlicht: <https://demo-work.h2.de> (Englisch: <https://demo-work.h2.de/en/>)
 
-## Quickstart
+## Schnellstart
 
 ```bash
 # Copy secrets template
@@ -41,7 +41,7 @@ docker compose up -d
 # Visit http://localhost:8000
 ```
 
-## Configuration
+## Konfiguration
 
 Siehe [`secrets.env.example`](secrets.env.example) für Einstellungen durch Environment Variablen.
 Siehe [`fidaa/knowledge`](fidaa/knowledge) (im Submodul, eigenes Repo) für die
@@ -65,7 +65,7 @@ Testnutzern, von Caddy unter `https://<host>/admin-<ADMIN_SALT>` geroutet.
   gemeinsames Passwort setzen (leer = zufällig pro Nutzer, einmalig angezeigt).
   Angelegte Nutzer können sich direkt im Chat anmelden.
 
-## License
+## Lizenz
 
 Dieses Projekt benutzt ein Dual-Lizenz-Modell, um Software- und Textinhalte mit entsprechend angemessenen Lizenzen zu versehen.
 
@@ -74,4 +74,6 @@ Dieses Projekt benutzt ein Dual-Lizenz-Modell, um Software- und Textinhalte mit 
 | Source code (`app.py`, `Dockerfile`, `docker-compose.yml`, etc.) | **EUPL 1.2**     | [LICENSE](LICENSE)                     |
 | Knowledge content (`fidaa/knowledge/*.md`)                       | **CC BY-SA 4.0** | [fidaa/LICENSE](fidaa/LICENSE)             |
 
-*Both licenses are open source (OSI-approved) and permit commercial use with attribution. The EUPL closes the SaaS loophole. Modified versions hosted as a service must remain open source.*
+*Beide Lizenzen sind Open Source (OSI-approval) und erlauben die kommerzielle
+Nutzung unter Quellenangabe. Die EUPL stopft die SaaS-Lücke: Modifizierte
+Versionen, die als Service betrieben werden, müssen Open Source bleiben.*
