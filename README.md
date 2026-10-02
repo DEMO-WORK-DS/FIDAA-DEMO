@@ -4,6 +4,8 @@
 
 # FIDAA -- **F**ach**i**nformation **D**igitale **A**ufsuchende **A**rbeit
 
+[**Click here, to read this page in English**](README.en.md)
+
 Chainlit Agent für Information Retrieval im Chat-Format aus einer vorgegebenen, geprüften Wissensdatenbank.
 Verwendet OpenAI-kompatibles Backend für Chat-Streaming (mit Thinking & Tooluse).
 Wissenszugriff übernimmt der FIDAA-Knowledge-Server (MCP, Git-Submodul [`fidaa/`](fidaa)):
