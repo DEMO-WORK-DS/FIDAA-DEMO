@@ -34,6 +34,25 @@
             flush_interval -1
         }
     }
+    # Tab-Favicon für die ganze Site (Chat-UI, Admin-Panel, MCP-Landing-Page):
+    # Der vom Browser konventionell erfragte /favicon*-Pfad ist keine
+    # Chainlit-Route (sonst antwortet der SPA-Catch-all mit der index.html),
+    # daher liefert Caddy die staticischen public/-Icons selbst. Reihenfolge
+    # ist relevant: die .ico-Variante kommt vor dem Wildcard, damit jede
+    # Anfrage eine Datei mit passender Endung/Content-Type bekommt
+    # (image/x-icon bzw. image/svg+xml — kein Format-/Namens-Mismatch).
+    # Regenerieren bei Logo-Änderung:
+    #   rsvg-convert -w 64 -h 64 public/favicon.svg -o /tmp/f64.png
+    #   rsvg-convert -w 32 -h 32 public/favicon.svg -o /tmp/f32.png
+    #   magick /tmp/f64.png /tmp/f32.png public/favicon.ico
+    handle /favicon.ico {
+        rewrite * /public/favicon.ico
+        reverse_proxy app:8000
+    }
+    handle /favicon* {
+        rewrite * /public/favicon.svg
+        reverse_proxy app:8000
+    }
     handle {
         reverse_proxy app:8000
     }
@@ -53,6 +72,15 @@
         reverse_proxy fidaa:8002 {
             flush_interval -1
         }
+    }
+    # Wie auf :443: /favicon.ico -> .ico, übrige /favicon* -> .svg.
+    handle /favicon.ico {
+        rewrite * /public/favicon.ico
+        reverse_proxy app:8000
+    }
+    handle /favicon* {
+        rewrite * /public/favicon.svg
+        reverse_proxy app:8000
     }
     handle {
         reverse_proxy app:8000
