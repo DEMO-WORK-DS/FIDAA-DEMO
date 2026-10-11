@@ -49,6 +49,10 @@ MCP_STEP_NAMES = {
     "search_bibliography": "📚 Bibliographiesuche",
     "search_documents": "📄 Dokumentensuche",
     "list_sections": "📑 Inhaltsverzeichnis",
+    # FIDAA 2026-10 tools: ID-only chapter search, complete chapter, whole file.
+    "search": "🔎 Kapitelsuche",
+    "fetch": "📖 Kapitel lesen",
+    "read_knowledge_file": "📂 Wissensdatei lesen",
 }
 
 # German display names for the FIDAA collections inside the TOC step
@@ -58,6 +62,14 @@ MCP_COLLECTION_LABELS = {
     "bibliography": "Bibliografie",
     "documents": "Dokumentenarchiv",
 }
+
+# FIDAA tools NOT offered to the chat model. read_knowledge_file returns
+# whole knowledge files in ~20k-token parts — meant for external agents
+# with large context windows. In this app every tool result stays in the
+# re-sent chat history (no trimming), so one call bloats all later turns
+# and the full kontext.md (10 parts) exceeds MAX_AGENT_STEPS anyway.
+# search_context / search + fetch already deliver complete chapters.
+HIDDEN_TOOLS = {"read_knowledge_file"}
 
 # Populated at startup from the MCP server's list_tools() — the server is
 # the single source of truth for tool names/descriptions. Read-only after
@@ -191,6 +203,7 @@ async def connect() -> None:
             },
         }
         for t in tool_list.tools
+        if t.name not in HIDDEN_TOOLS
     ]
 
     shared_session = McpSession(
