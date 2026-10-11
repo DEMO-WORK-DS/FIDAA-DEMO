@@ -8,7 +8,9 @@ FIDAA-DEMO: Chainlit agent app (Python 3.13, uv, Docker Compose) in front of an
 OpenAI-compatible, self-hosted LLM API. Knowledge access is NOT embedded in
 this app: the FIDAA knowledge server (git submodule `fidaa/`, compose service
 `fidaa`) serves the knowledge base as MCP tools (`search_context`,
-`search_bibliography`, `list_sections`, optionally `search_documents`),
+`search_bibliography`, `list_sections`, `search` + `fetch`,
+`read_knowledge_file`, optionally `search_documents`; `app.py`
+`_render_structured` renders each result shape),
 chapter resources (`fidaa://context/…`) and prompts, with an in-memory
 hybrid index (vectors + BM25, RRF fusion) that is rebuilt at every boot. `app.py` activates that
 connection at startup (D1.5 backend activation, Chainlit 2.12-native MCP

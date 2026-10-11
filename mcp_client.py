@@ -49,6 +49,10 @@ MCP_STEP_NAMES = {
     "search_bibliography": "📚 Bibliographiesuche",
     "search_documents": "📄 Dokumentensuche",
     "list_sections": "📑 Inhaltsverzeichnis",
+    # FIDAA 2026-10 tools: ID-only chapter search, complete chapter, whole file.
+    "search": "🔎 Kapitelsuche",
+    "fetch": "📖 Kapitel lesen",
+    "read_knowledge_file": "📂 Wissensdatei lesen",
 }
 
 # German display names for the FIDAA collections inside the TOC step

@@ -381,6 +381,92 @@ async def _thinking_step(message_content):
     return text_acc, tool_calls_acc
 
 
+def _render_structured(
+    structured: dict | None, parsed_args: dict, query: str
+) -> tuple[str, list[str], str] | None:
+    """Render a FIDAA tool's structured output → (step header, rendered
+    step sources, text for the LLM); None = unknown shape (caller falls
+    back to the raw text blocks).
+
+    Pure function (no Chainlit context) so the shapes stay testable. Shapes
+    of the FIDAA server (fidaa submodule):
+    - search_context / search_bibliography / search_documents:
+      {results: [{heading_path, text, score, chapter_id, url}]} — complete
+      chapters (parity with the old retriever shape);
+    - search: {results: [{id, title, url}]} — chapter IDs only, read via fetch;
+    - fetch: {id, title, text, url, metadata} — one complete chapter;
+    - read_knowledge_file: {file, part, total_parts, text, url};
+    - list_sections: {collections: [{name, headings}]}, headings entries
+      {heading_path, id} (older servers: bare heading-path lists).
+    """
+    if not structured:
+        return None
+    if "results" in structured and all("text" in r for r in structured["results"]):
+        results = structured["results"]
+        header = f"**Suchanfrage:** `{query}`\n### 🔍 Gefundene Quellen\n"
+        result_text = "\n\n---\n\n".join(r["text"] for r in results)
+        sources = []
+        for i, r in enumerate(results, 1):
+            heading = " > ".join(filter(None, r.get("heading_path", [])))
+            sources.append(f"#### {i}. `{heading}`\n```markdown\n{r['text']}\n```")
+        return header, sources, result_text
+    if "results" in structured:
+        # search (ID-only hits): the LLM needs the IDs to call fetch.
+        header = f"**Suchanfrage:** `{query}`\n### 🔎 Gefundene Kapitel\n"
+        result_text = "\n".join(
+            f"- ID `{r['id']}` — {r['title']} ({r['url']})"
+            for r in structured["results"]
+        )
+        return header, [result_text], result_text
+    if "collections" in structured:
+        # list_sections (M4, R6.5): render the TOC as a Markdown outline
+        # (bold chapter, indented subsections) instead of the raw JSON
+        # block; the LLM consumes the same outline as its tool result.
+        toc: list[str] = []
+        for col in structured["collections"]:
+            label = mcp_client.MCP_COLLECTION_LABELS.get(col["name"], col["name"])
+            toc.append(f"#### {label} — {len(col['headings'])} Abschnitte")
+            # Group by top-level heading: one bold parent line per
+            # chapter, one indented line per subsection.
+            groups: dict[str, list[tuple[list[str], str | None]]] = {}
+            for h in col["headings"]:
+                # FIDAA ≥ 2026-10 sends {heading_path, id} (id → fetch);
+                # older servers sent the bare heading path.
+                path, cid = (h["heading_path"], h.get("id")) if isinstance(h, dict) else (h, None)
+                groups.setdefault(path[0], []).append((path[1:], cid))
+            for top, subs in groups.items():
+                if len(subs) == 1 and not subs[0][0]:
+                    cid = subs[0][1]
+                    toc.append(f"- {top}" + (f" — ID `{cid}`" if cid else ""))
+                else:
+                    toc.append(f"- **{top}**")
+                    for sub, cid in subs:
+                        if sub:
+                            toc.append(
+                                f"  - {' > '.join(sub)}" + (f" — ID `{cid}`" if cid else "")
+                            )
+        header = (
+            f"**Sammlung:** `{parsed_args.get('collection', 'all')}`\n"
+            "### 📑 Inhaltsverzeichnis\n"
+        )
+        result_text = "\n".join(toc)
+        return header, [result_text], result_text
+    if "text" in structured:
+        # fetch (one complete chapter) / read_knowledge_file (one file part).
+        if "part" in structured:
+            # Tell the LLM which part this is (more parts may follow).
+            title = f"{structured['file']} — Teil {structured['part']} von {structured['total_parts']}"
+            header = f"**Datei:** `{structured['file']}`\n### 📂 Wissensdatei\n"
+            result_text = f"{title}\n\n{structured['text']}"
+        else:
+            # A chapter's text already starts with its "## …" heading.
+            title = structured.get("title", "")
+            header = f"**Kapitel:** `{structured.get('id', '')}`\n### 📖 Kapitel\n"
+            result_text = structured["text"]
+        return header, [f"#### {title}\n```markdown\n{structured['text']}\n```"], result_text
+    return None
+
+
 async def _mcp_tool_step(tc: dict) -> str:
     """Run one MCP tool call and render its search step in the UI.
 
@@ -398,7 +484,13 @@ async def _mcp_tool_step(tc: dict) -> str:
         parsed_args = json.loads(raw_args)
     except Exception:
         parsed_args = {"query": raw_args}
-    query = parsed_args.get("query", "")
+    # fetch / read_knowledge_file have no query: show their id/file instead.
+    query = (
+        parsed_args.get("query")
+        or parsed_args.get("id")
+        or parsed_args.get("file")
+        or ""
+    )
 
     # Standard Chainlit MCP lookup: mcp_sessions entries unpack as
     # (client, sentinel).
@@ -420,53 +512,19 @@ async def _mcp_tool_step(tc: dict) -> str:
 
         if getattr(result, "isError", False):
             step.output = "Fehler beim Abrufen des Kontexts."
-            return "Fehler beim Abrufen des Kontexts."
-
-        # The FIDAA server returns structured output
-        # {results: [{heading_path, text}]} (parity with the old retriever
-        # shape); list_sections returns {collections: [{name, headings}]}
-        # and is rendered as a Markdown outline; anything else falls back
-        # to the raw text content blocks.
-        structured = getattr(result, "structuredContent", None)
-        header = f"**Suchanfrage:** `{query}`\n### 🔍 Gefundene Quellen\n"
-        if structured and "results" in structured:
-            results = structured["results"]
-            result_text = "\n\n---\n\n".join(r["text"] for r in results)
-            sources = []
-            for i, r in enumerate(results, 1):
-                heading = " > ".join(filter(None, r.get("heading_path", [])))
-                sources.append(f"#### {i}. `{heading}`\n```markdown\n{r['text']}\n```")
-        elif structured and "collections" in structured:
-            # list_sections (M4, R6.5): render the TOC as a Markdown
-            # outline (bold chapter, indented subsections) instead of the
-            # raw JSON block; the LLM consumes the same outline as its
-            # tool result.
-            toc: list[str] = []
-            for col in structured["collections"]:
-                label = mcp_client.MCP_COLLECTION_LABELS.get(col["name"], col["name"])
-                toc.append(
-                    f"#### {label} — {len(col['headings'])} Abschnitte"
-                )
-                # Group by top-level heading: one bold parent line per
-                # chapter, one indented line per subsection.
-                groups: dict[str, list[list[str]]] = {}
-                for h in col["headings"]:
-                    groups.setdefault(h[0], []).append(h[1:])
-                for top, subs in groups.items():
-                    if subs == [[]]:
-                        toc.append(f"- {top}")  # chapter without subsections
-                    else:
-                        toc.append(f"- **{top}**")
-                        for sub in subs:
-                            if sub:
-                                toc.append(f"  - {' > '.join(sub)}")
-            header = (
-                f"**Sammlung:** `{parsed_args.get('collection', 'all')}`\n"
-                "### 📑 Inhaltsverzeichnis\n"
+            # Hand the server's message to the LLM: FIDAA's errors say how
+            # to fix the call (e.g. unknown chapter ID → use search first).
+            detail = " ".join(
+                b.text for b in result.content if getattr(b, "type", "") == "text"
             )
-            result_text = "\n".join(toc)
-            sources = [result_text]
+            return f"Fehler beim Abrufen des Kontexts. {detail}".strip()
+
+        structured = getattr(result, "structuredContent", None)
+        rendered = _render_structured(structured, parsed_args, query)
+        if rendered is not None:
+            header, sources, result_text = rendered
         else:
+            header = f"**Suchanfrage:** `{query}`\n### 🔍 Gefundene Quellen\n"
             result_text = "\n\n---\n\n".join(
                 b.text for b in result.content if getattr(b, "type", "") == "text"
             )
