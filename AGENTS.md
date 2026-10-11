@@ -10,7 +10,8 @@ this app: the FIDAA knowledge server (git submodule `fidaa/`, compose service
 `fidaa`) serves the knowledge base as MCP tools (`search_context`,
 `search_bibliography`, `list_sections`, `search` + `fetch`,
 `read_knowledge_file`, optionally `search_documents`; `app.py`
-`_render_structured` renders each result shape),
+`_render_structured` renders each result shape; `read_knowledge_file`
+is hidden from the chat model via `HIDDEN_TOOLS` in `mcp_client.py`),
 chapter resources (`fidaa://context/…`) and prompts, with an in-memory
 hybrid index (vectors + BM25, RRF fusion) that is rebuilt at every boot. `app.py` activates that
 connection at startup (D1.5 backend activation, Chainlit 2.12-native MCP
